@@ -47,7 +47,7 @@ CLIENT_DATABASE = {
 }
 
 # -----------------------------------------------------------------------------
-# FUNÇÕES DE TRATAMENTO E DEDUPLICAÇÃO
+# FUNÇÕES DE TRATAMENTO E CONVERSÃO SEGURA
 # -----------------------------------------------------------------------------
 def parse_currency(val):
     if pd.isna(val): return 0.0
@@ -68,8 +68,7 @@ def format_brl(val):
 def parse_any_date(series):
     if series is None or series.empty:
         return pd.Series(dtype='datetime64[ns]')
-    clean_series = series.astype(str).str.strip()
-    return pd.to_datetime(clean_series, errors='coerce')
+    return pd.to_datetime(series.astype(str).str.strip(), dayfirst=True, errors='coerce')
 
 def find_column(df, possible_names):
     if df.empty: return None
@@ -128,23 +127,23 @@ df_extrato, df_var, df_fixas = load_operational_data(cliente_info['sheet_id'])
 target_month = 9 if "Setembro" in periodo_selecionado else (8 if "Agosto" in periodo_selecionado else None)
 
 # -----------------------------------------------------------------------------
-# EXTRATO BANCÁRIO (DEDUPLICADO)
+# EXTRATO BANCÁRIO (DEDUPLICADO E COM DATA VÁLIDA)
 # -----------------------------------------------------------------------------
 df_extrato_f = pd.DataFrame()
 if not df_extrato.empty:
     col_date_ext = find_column(df_extrato, ['DATA', 'DATA ', 'DATA DO LANÇAMENTO'])
     if col_date_ext:
-        df_extrato['DT_PARSED'] = parse_any_date(df_extrato[col_date_ext])
+        dt_series = parse_any_date(df_extrato[col_date_ext])
+        df_extrato['DT_PARSED'] = dt_series
         if target_month:
-            df_extrato_f = df_extrato[(df_extrato['DT_PARSED'].dt.month == target_month) & (df_extrato['DT_PARSED'].dt.year == 2026)]
+            df_extrato_f = df_extrato[(dt_series.dt.month == target_month) & (dt_series.dt.year == 2026)]
         else:
-            df_extrato_f = df_extrato[df_extrato['DT_PARSED'].dt.year == 2026]
+            df_extrato_f = df_extrato[dt_series.dt.year == 2026]
 
 receita_real = 0.0
 if not df_extrato_f.empty:
     col_val_ext = find_column(df_extrato_f, ['BANCO', 'VALOR', 'VALOR (R$)'])
     if col_val_ext:
-        # Remoção de duplicidades exatas no extrato
         col_desc = find_column(df_extrato_f, ['DESCRIÇÃO', 'DESCRICAO'])
         sub_cols = [c for c in [col_date_ext, col_desc, col_val_ext] if c]
         if sub_cols:
@@ -154,22 +153,23 @@ if not df_extrato_f.empty:
         receita_real = vals[vals > 0].sum()
 
 # -----------------------------------------------------------------------------
-# CONTAS VARIÁVEIS (DEDUPLICADO)
+# CONTAS VARIÁVEIS (DEDUPLICADO E COM DATA VÁLIDA)
 # -----------------------------------------------------------------------------
 df_var_f = pd.DataFrame()
 if not df_var.empty:
     col_pag = find_column(df_var, ['Data de Pagamento'])
     col_venc = find_column(df_var, ['Vencimento'])
     
-    dt_pag = parse_any_date(df_var[col_pag]) if col_pag else pd.Series()
-    dt_venc = parse_any_date(df_var[col_venc]) if col_venc else pd.Series()
+    dt_pag = parse_any_date(df_var[col_pag]) if col_pag else pd.Series(dtype='datetime64[ns]')
+    dt_venc = parse_any_date(df_var[col_venc]) if col_venc else pd.Series(dtype='datetime64[ns]')
     
-    df_var['DT_PARSED'] = dt_pag.fillna(dt_venc)
+    dt_final_var = dt_pag.fillna(dt_venc)
+    df_var['DT_PARSED'] = dt_final_var
 
     if target_month:
-        df_var_f = df_var[(df_var['DT_PARSED'].dt.month == target_month) & (df_var['DT_PARSED'].dt.year == 2026)]
+        df_var_f = df_var[(dt_final_var.dt.month == target_month) & (dt_final_var.dt.year == 2026)]
     else:
-        df_var_f = df_var[df_var['DT_PARSED'].dt.year == 2026]
+        df_var_f = df_var[dt_final_var.dt.year == 2026]
 
 custo_var_pago = 0.0
 var_vencido = 0.0
@@ -179,7 +179,6 @@ if not df_var_f.empty:
     col_forn_var = find_column(df_var_f, ['Fornecedor'])
     col_desc_var = find_column(df_var_f, ['Descrição'])
     
-    # Deduplicação rigorosa
     dup_cols_v = [c for c in [col_venc, col_forn_var, col_desc_var, col_val_var] if c]
     if dup_cols_v:
         df_var_f = df_var_f.drop_duplicates(subset=dup_cols_v)
@@ -191,22 +190,23 @@ if not df_var_f.empty:
             var_vencido = df_var_f[df_var_f[col_status_var].isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
 # -----------------------------------------------------------------------------
-# CONTAS FIXAS (DEDUPLICADO)
+# CONTAS FIXAS (DEDUPLICADO E COM DATA VÁLIDA)
 # -----------------------------------------------------------------------------
 df_fixas_f = pd.DataFrame()
 if not df_fixas.empty:
     col_pag_f = find_column(df_fixas, ['Data de Pagamento'])
     col_venc_f = find_column(df_fixas, ['Vencimento'])
     
-    dt_pag_f = parse_any_date(df_fixas[col_pag_f]) if col_pag_f else pd.Series()
-    dt_venc_f = parse_any_date(df_fixas[col_venc_f]) if col_venc_f else pd.Series()
+    dt_pag_f = parse_any_date(df_fixas[col_pag_f]) if col_pag_f else pd.Series(dtype='datetime64[ns]')
+    dt_venc_f = parse_any_date(df_fixas[col_venc_f]) if col_venc_f else pd.Series(dtype='datetime64[ns]')
     
-    df_fixas['DT_PARSED'] = dt_pag_f.fillna(dt_venc_f)
+    dt_final_fix = dt_pag_f.fillna(dt_venc_f)
+    df_fixas['DT_PARSED'] = dt_final_fix
 
     if target_month:
-        df_fixas_f = df_fixas[(df_fixas['DT_PARSED'].dt.month == target_month) & (df_fixas['DT_PARSED'].dt.year == 2026)]
+        df_fixas_f = df_fixas[(dt_final_fix.dt.month == target_month) & (dt_final_fix.dt.year == 2026)]
     else:
-        df_fixas_f = df_fixas[df_fixas['DT_PARSED'].dt.year == 2026]
+        df_fixas_f = df_fixas[dt_final_fix.dt.year == 2026]
 
 custo_fixo_pago = 0.0
 fixo_vencido = 0.0
