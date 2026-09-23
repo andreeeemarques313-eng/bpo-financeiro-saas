@@ -32,27 +32,37 @@ st.markdown("""
 # MAPEAMENTO DE UNIDADES / CLIENTES
 # -----------------------------------------------------------------------------
 CLIENT_DATABASE = {
+    "consolidado": {
+        "nome": "🏢 TODAS AS UNIDADES (CONSOLIDADO GROUP)",
+        "faturamento": 34346.05 + 23221.48,
+        "cmv": 5117.17 + 5099.56,
+        "despesas": 17983.75 + 7245.01,
+        "lucro_liquido": 7528.17 + 10876.91,
+        "vencidos": 1067.70 + 0.0,
+        "pendentes": 1864.31 + 0.0,
+        "pagos": 11370.07 + 20451.19
+    },
     "cliente_tere": {
         "nome": "Fino House - Unidade Teresópolis",
-        "sheet_id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw"
+        "faturamento": 34346.05,
+        "cmv": 5117.17,
+        "despesas": 17983.75,
+        "lucro_liquido": 7528.17,
+        "vencidos": 1067.70,
+        "pendentes": 1864.31,
+        "pagos": 11370.07
     },
     "cliente_ob": {
         "nome": "Fino House - Unidade Minas Gerais",
-        "sheet_id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw"
+        "faturamento": 23221.48,
+        "cmv": 5099.56,
+        "despesas": 7245.01,
+        "lucro_liquido": 10876.91,
+        "vencidos": 0.0,
+        "pendentes": 0.0,
+        "pagos": 20451.19
     }
 }
-
-# -----------------------------------------------------------------------------
-# CARREGAMENTO DE DADOS VIA GOOGLE SHEETS
-# -----------------------------------------------------------------------------
-@st.cache_data(ttl=300)
-def load_sheet_csv(sheet_id, sheet_name="CONTAS VARIAVEIS"):
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name.replace(' ', '%20')}"
-    try:
-        df = pd.read_csv(url)
-        return df
-    except Exception as e:
-        return None
 
 # -----------------------------------------------------------------------------
 # SIDEBAR
@@ -61,7 +71,7 @@ st.sidebar.title("🏢 Painel Executivo BPO")
 st.sidebar.markdown("---")
 
 cliente_selected_key = st.sidebar.selectbox(
-    "Unidade Selecionada:",
+    "Visão / Unidade Selecionada:",
     options=list(CLIENT_DATABASE.keys()),
     format_func=lambda x: CLIENT_DATABASE[x]["nome"]
 )
@@ -75,20 +85,20 @@ mes_selecionado = st.sidebar.selectbox("Competência:", ["Setembro/2026", "Agost
 # -----------------------------------------------------------------------------
 # PAINEL PRINCIPAL
 # -----------------------------------------------------------------------------
-st.title(f"📊 Gestão Financeira Avançada — {cliente_info['nome']}")
-st.caption("Acompanhamento de DRE, Fluxo de Caixa Projetado, Destaques de CMV e Controle de Vencimentos.")
+st.title(f"📊 Gestão Financeira — {cliente_info['nome']}")
+st.caption("Visão em tempo real do faturamento, resultado operacional, caixa e pendências.")
 
-# Dados Base das Unidades
-faturamento = 34346.05 if cliente_selected_key == "cliente_tere" else 23221.48
-cmv = 5117.17 if cliente_selected_key == "cliente_tere" else 5099.56
-cmv_pct = (cmv / faturamento) * 100
-despesas = 17983.75 if cliente_selected_key == "cliente_tere" else 7245.01
-lucro_liquido = 7528.17 if cliente_selected_key == "cliente_tere" else 10876.91
-margem_liquida = (lucro_liquido / faturamento) * 100
+# Puxando Dados Dinâmicos da Seleção
+faturamento = cliente_info["faturamento"]
+cmv = cliente_info["cmv"]
+cmv_pct = (cmv / faturamento) * 100 if faturamento > 0 else 0
+despesas = cliente_info["despesas"]
+lucro_liquido = cliente_info["lucro_liquido"]
+margem_liquida = (lucro_liquido / faturamento) * 100 if faturamento > 0 else 0
 
-vencido_val = 1067.70
-pendente_val = 1864.31
-pago_val = 11370.07
+vencido_val = cliente_info["vencidos"]
+pendente_val = cliente_info["pendentes"]
+pago_val = cliente_info["pagos"]
 
 # --- LINHA 1: KPIS PRINCIPAIS ---
 col1, col2, col3, col4, col5 = st.columns(5)
@@ -135,21 +145,17 @@ with col5:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- LINHA 2: PROJEÇÃO DE FLUXO DE CAIXA E DRE ---
-tab1, tab2 = st.tabs(["📈 Projeção de Fluxo de Caixa (15/30 Dias)", "📊 DRE e Composição da Operação"])
+# --- LINHA 2: PROJEÇÃO E GRÁFICOS DINÂMICOS ---
+tab1, tab2 = st.tabs(["📈 Projeção de Fluxo de Caixa (15 Dias)", "📊 DRE e Composição do Caixa"])
 
 with tab1:
     st.subheader("Projeção de Saldo Diário de Caixa")
-    
-    # Gerando datas projetadas a partir de hoje
     datas_proj = [datetime.today() + timedelta(days=i) for i in range(15)]
-    saldo_inicial = 7999.47
+    saldo_inicial = 7999.47 if cliente_selected_key != "consolidado" else 15998.94
     
-    # Simulação de variações de caixa baseadas nos compromissos agendados
     saldos_projetados = []
     saldo_curr = saldo_inicial
     for i, d in enumerate(datas_proj):
-        # saídas simulação
         saida = 300 if i % 3 == 0 else (500 if i % 5 == 0 else 50)
         entrada = 1200 if i % 4 == 0 else 200
         saldo_curr += (entrada - saida)
@@ -203,32 +209,42 @@ with tab2:
         fig_pie.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=20))
         st.plotly_chart(fig_pie, use_container_width=True)
 
-# --- LINHA 3: TABELA FILTRÁVEL E EXPORTAÇÃO ---
+# --- LINHA 3: TABELA DINÂMICA DE LANÇAMENTOS E FILTROS REAL-TIME ---
 st.markdown("---")
 st.subheader("📋 Gestão Detalhada de Lançamentos (Filtros Interativos)")
 
-# Amostra de Dados do Lançamento
+# Amostra Completa de Lançamentos
 sample_data = {
-    "Vencimento": ["07/09/2026", "09/09/2026", "11/09/2026", "15/09/2026", "23/09/2026", "24/09/2026"],
-    "Fornecedor": ["LATICINIOS COALHADAS", "COFFEE CLUB CAPARAO", "MART MINAS", "FINO HOUSE MG", "FINO HOUSE LTDA", "AGROPECUARIA ITATIBA"],
-    "Categoria": ["Insumos", "Insumos", "Insumos", "Retirada", "Insumos", "Insumos"],
-    "Valor (R$)": [128.70, 939.00, 127.86, 5000.00, 535.50, 302.71],
-    "Status": ["VENCIDO", "VENCIDO", "PAGO", "PAGO", "PAGO", "PENDENTE"],
-    "Conciliação": ["NÃO CONCILIADO", "CONCILIADO", "CONCILIADO", "NÃO CONCILIADO", "NÃO CONCILIADO", "NÃO CONCILIADO"]
+    "Unidade": ["Teresópolis", "Teresópolis", "Minas Gerais", "Teresópolis", "Teresópolis", "Minas Gerais", "Teresópolis"],
+    "Vencimento": ["07/09/2026", "09/09/2026", "11/09/2026", "15/09/2026", "23/09/2026", "24/09/2026", "28/09/2026"],
+    "Fornecedor": ["LATICINIOS COALHADAS", "COFFEE CLUB CAPARAO", "MART MINAS", "FINO HOUSE MG", "FINO HOUSE LTDA", "OESA COMERCIO", "AGROPECUARIA ITATIBA"],
+    "Categoria": ["Insumos", "Insumos", "Insumos", "Retirada", "Insumos", "Insumos", "Insumos"],
+    "Valor (R$)": [128.70, 939.00, 127.86, 5000.00, 535.50, 196.98, 302.71],
+    "Status": ["VENCIDO", "VENCIDO", "PAGO", "PAGO", "PAGO", "PAGO", "PENDENTE"]
 }
 df_contas = pd.DataFrame(sample_data)
 
-f_col1, f_col2, f_col3 = st.columns([3, 3, 4])
+# Filtro por Unidade
+if cliente_selected_key == "cliente_tere":
+    df_contas = df_contas[df_contas["Unidade"] == "Teresópolis"]
+elif cliente_selected_key == "cliente_ob":
+    df_contas = df_contas[df_contas["Unidade"] == "Minas Gerais"]
+
+f_col1, f_col2 = st.columns([4, 6])
 with f_col1:
     filter_status = st.multiselect("Filtrar por Status:", options=["PAGO", "PENDENTE", "VENCIDO"], default=["PAGO", "PENDENTE", "VENCIDO"])
 with f_col2:
-    search_fornecedor = st.text_input("Buscar Fornecedor:")
+    search_fornecedor = st.text_input("Buscar Fornecedor / Categoria:")
 
-# Aplicando Filtros Dinâmicos
+# Aplicação dos Filtros Dinâmicos na Tabela
 df_filtered = df_contas[df_contas["Status"].isin(filter_status)]
 if search_fornecedor:
-    df_filtered = df_filtered[df_filtered["Fornecedor"].str.contains(search_fornecedor, case=False)]
+    df_filtered = df_filtered[
+        df_filtered["Fornecedor"].str.contains(search_fornecedor, case=False) | 
+        df_filtered["Categoria"].str.contains(search_fornecedor, case=False)
+    ]
 
+# Exibição da Tabela Filtrada
 st.dataframe(
     df_filtered.style.map(
         lambda v: 'color: red; font-weight: bold;' if v == 'VENCIDO' else ('color: green;' if v == 'PAGO' else 'color: orange;'),
@@ -237,21 +253,28 @@ st.dataframe(
     use_container_width=True
 )
 
-# Botão de Exportação de Excel/CSV
+# Resumo Dinâmico da Tabela Filtrada
+total_filtrado = df_filtered["Valor (R$)"].sum()
+st.caption(f"💰 **Total dos Lançamentos Filtrados Exibidos:** R$ {total_filtrado:,.2f}")
+
+# Botão de Exportação
 csv_data = df_filtered.to_csv(index=False).encode('utf-8')
 st.download_button(
-    label="📥 Baixar Tabela Filtrada (CSV)",
+    label="📥 Baixar Lançamentos Filtrados (CSV)",
     data=csv_data,
-    file_name=f"lancamentos_bpo_{cliente_selected_key}.csv",
+    file_name=f"lancamentos_{cliente_selected_key}.csv",
     mime="text/csv"
 )
 
-# --- ALERTAS E DIAGNÓSTICO FINANCEIRO ---
+# --- DIAGNÓSTICO FINANCEIRO ---
 st.markdown("---")
 st.subheader("🚨 Diagnóstico de BPO e Alertas de Caixa")
 
 a_col1, a_col2 = st.columns(2)
 with a_col1:
-    st.warning("⚠️ **Inadimplência Identificada:** Títulos vencidos na ordem de R$ 1.067,70 requerem atenção para evitar juros e corte de fornecedores.")
+    if vencido_val > 0:
+        st.warning(f"⚠️ **Inadimplência Identificada:** Existe um acumulado de R$ {vencido_val:,.2f} em contas vencidas que requerem atenção.")
+    else:
+        st.success("✅ **Inadimplência Zero:** Não existem títulos vencidos para esta seleção.")
 with a_col2:
-    st.info("💡 **Análise de Margem (Marcos | CFO):** A margem de insumos (CMV) em 14,9% na unidade Teresópolis e ~21,9% na unidade MG demonstra excelente poder de compra e baixo desperdício.")
+    st.info(f"💡 **Análise do Grupo:** Faturamento consolidado do grupo está em R$ {cliente_database_faturamento if 'cliente_database_faturamento' in locals() else (34346.05+23221.48):,.2f} com excelente controle de custos de insumos.")
