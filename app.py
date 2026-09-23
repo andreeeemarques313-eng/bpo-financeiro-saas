@@ -47,7 +47,7 @@ CLIENT_DATABASE = {
 }
 
 # -----------------------------------------------------------------------------
-# FUNÇÕES DE TRATAMENTO DE MOEDA E DATAS (SEM FALHAS)
+# FUNÇÕES DEFENSIVAS DE TRATAMENTO
 # -----------------------------------------------------------------------------
 def parse_currency(val):
     if pd.isna(val): return 0.0
@@ -66,13 +66,24 @@ def format_brl(val):
     return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def parse_any_date(series):
-    """Lê qualquer formato de data sem falhar (YYYY-MM-DD, DD/MM/YYYY, etc.)"""
-    # Remove espaços em branco
+    if series is None or series.empty:
+        return pd.Series(dtype='datetime64[ns]')
     clean_series = series.astype(str).str.strip()
     return pd.to_datetime(clean_series, dayfirst=True, errors='coerce')
 
+def find_column(df, possible_names):
+    """Busca uma coluna no dataframe de forma insensível a maiúsculas/espaços"""
+    if df.empty:
+        return None
+    cols_clean = {str(c).strip().lower(): c for c in df.columns}
+    for name in possible_names:
+        name_clean = name.strip().lower()
+        if name_clean in cols_clean:
+            return cols_clean[name_clean]
+    return None
+
 # -----------------------------------------------------------------------------
-# CARREGAMENTO E NORMALIZAÇÃO DAS PLANILHAS
+# CARREGAMENTO DE DADOS
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=10)
 def load_operational_data(sheet_id):
@@ -80,7 +91,6 @@ def load_operational_data(sheet_id):
         url = f"https://docs.google.com/spreadsheets/d/{s_id}/export?format=csv&sheet={sheet_name.replace(' ', '%20')}"
         try:
             df = pd.read_csv(url)
-            # Remove espaços no início e fim de TODOS os nomes de colunas
             df.columns = df.columns.astype(str).str.strip()
             return df
         except:
@@ -115,21 +125,19 @@ st.sidebar.markdown("### 🔍 Filtro de Período Mês a Mês")
 periodo_opcoes = ["Setembro/2026", "Agosto/2026", "Julho/2026", "CONSOLIDADO DO ANO (2026)"]
 periodo_selecionado = st.sidebar.selectbox("Competência / Filtro:", periodo_opcoes)
 
-# Carregamento dos dados das abas
+# Carregamento dos dados
 df_extrato, df_var, df_fixas = load_operational_data(cliente_info['sheet_id'])
 
-# Mapeamento do mês selecionado
 target_month = 9 if "Setembro" in periodo_selecionado else (8 if "Agosto" in periodo_selecionado else (7 if "Julho" in periodo_selecionado else None))
 
 # -----------------------------------------------------------------------------
-# FILTRAGEM DO EXTRATO BANCÁRIO (ENTRADAS REAIS)
+# FILTRAGEM SEGURA - EXTRATO
 # -----------------------------------------------------------------------------
 df_extrato_f = pd.DataFrame()
 if not df_extrato.empty:
-    # Procura coluna de data (DATA ou DATA )
-    date_col_ext = [c for c in df_extrato.columns if 'DATA' in c.upper()]
-    if date_col_ext:
-        df_extrato['DT_PARSED'] = parse_any_date(df_extrato[date_col_ext[0]])
+    col_date = find_column(df_extrato, ['DATA', 'DATA ', 'DATA DO LANÇAMENTO'])
+    if col_date:
+        df_extrato['DT_PARSED'] = parse_any_date(df_extrato[col_date])
         if target_month:
             df_extrato_f = df_extrato[(df_extrato['DT_PARSED'].dt.month == target_month) & (df_extrato['DT_PARSED'].dt.year == 2026)]
         else:
@@ -137,58 +145,58 @@ if not df_extrato.empty:
 
 receita_real = 0.0
 if not df_extrato_f.empty:
-    val_col_ext = [c for c in df_extrato_f.columns if 'BANCO' in c.upper() or 'VALOR' in c.upper()]
-    if val_col_ext:
-        vals = df_extrato_f[val_col_ext[0]].apply(parse_currency)
+    col_val = find_column(df_extrato_f, ['BANCO', 'VALOR', 'VALOR (R$)'])
+    if col_val:
+        vals = df_extrato_f[col_val].apply(parse_currency)
         receita_real = vals[vals > 0].sum()
 
 # -----------------------------------------------------------------------------
-# FILTRAGEM DE CONTAS VARIÁVEIS
+# FILTRAGEM SEGURA - CONTAS VARIÁVEIS
 # -----------------------------------------------------------------------------
 df_var_f = pd.DataFrame()
 if not df_var.empty:
-    # Usa Data de Pagamento se existir, senão Vencimento
-    date_col_var = 'Data de Pagamento' if 'Data de Pagamento' in df_var.columns else 'Vencimento'
-    df_var['DT_PARSED'] = parse_any_date(df_var[date_col_var])
-    # Fallback se a data de pagamento/vencimento falhar
-    if 'Vencimento' in df_var.columns:
-        df_var['DT_PARSED'] = df_var['DT_PARSED'].fillna(parse_any_date(df_var['Vencimento']))
-
-    if target_month:
-        df_var_f = df_var[(df_var['DT_PARSED'].dt.month == target_month) & (df_var['DT_PARSED'].dt.year == 2026)]
-    else:
-        df_var_f = df_var[df_var['DT_PARSED'].dt.year == 2026]
+    col_date_var = find_column(df_var, ['Data de Pagamento', 'Vencimento', 'Competência'])
+    if col_date_var:
+        df_var['DT_PARSED'] = parse_any_date(df_var[col_date_var])
+        if target_month:
+            df_var_f = df_var[(df_var['DT_PARSED'].dt.month == target_month) & (df_var['DT_PARSED'].dt.year == 2026)]
+        else:
+            df_var_f = df_var[df_var['DT_PARSED'].dt.year == 2026]
 
 custo_var_pago = 0.0
 var_vencido = 0.0
-if not df_var_f.empty and 'Valor' in df_var_f.columns:
-    df_var_f['VALOR_CLEAN'] = df_var_f['Valor'].apply(parse_currency)
-    if 'Status' in df_var_f.columns:
-        custo_var_pago = df_var_f[df_var_f['Status'] == 'PAGO']['VALOR_CLEAN'].sum()
-        var_vencido = df_var_f[df_var_f['Status'].isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
+if not df_var_f.empty:
+    col_val_var = find_column(df_var_f, ['Valor', 'Valor (R$)'])
+    col_status_var = find_column(df_var_f, ['Status'])
+    if col_val_var:
+        df_var_f['VALOR_CLEAN'] = df_var_f[col_val_var].apply(parse_currency)
+        if col_status_var:
+            custo_var_pago = df_var_f[df_var_f[col_status_var] == 'PAGO']['VALOR_CLEAN'].sum()
+            var_vencido = df_var_f[df_var_f[col_status_var].isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
 # -----------------------------------------------------------------------------
-# FILTRAGEM DE CONTAS FIXAS
+# FILTRAGEM SEGURA - CONTAS FIXAS
 # -----------------------------------------------------------------------------
 df_fixas_f = pd.DataFrame()
 if not df_fixas.empty:
-    date_col_fix = 'Data de Pagamento' if 'Data de Pagamento' in df_fixas.columns else 'Vencimento'
-    df_fixas['DT_PARSED'] = parse_any_date(df_fixas[date_col_fix])
-    if 'Vencimento' in df_fixas.columns:
-        df_fixas['DT_PARSED'] = df_fixas['DT_PARSED'].fillna(parse_any_date(df_fixas['Vencimento']))
-
-    if target_month:
-        df_fixas_f = df_fixas[(df_fixas['DT_PARSED'].dt.month == target_month) & (df_fixas['DT_PARSED'].dt.year == 2026)]
-    else:
-        df_fixas_f = df_fixas[df_fixas['DT_PARSED'].dt.year == 2026]
+    col_date_fix = find_column(df_fixas, ['Data de Pagamento', 'Vencimento', 'Competência'])
+    if col_date_fix:
+        df_fixas['DT_PARSED'] = parse_any_date(df_fixas[col_date_fix])
+        if target_month:
+            df_fixas_f = df_fixas[(df_fixas['DT_PARSED'].dt.month == target_month) & (df_fixas['DT_PARSED'].dt.year == 2026)]
+        else:
+            df_fixas_f = df_fixas[df_fixas['DT_PARSED'].dt.year == 2026]
 
 custo_fixo_pago = 0.0
 fixo_vencido = 0.0
-if not df_fixas_f.empty and 'Valor' in df_fixas_f.columns:
-    df_fixas_f['VALOR_CLEAN'] = df_fixas_f['Valor'].apply(parse_currency)
-    if 'Status' in df_fixas_f.columns:
-        custo_fixo_pago = df_fixas_f[df_fixas_f['Status'] == 'PAGO']['VALOR_CLEAN'].sum()
-        fixo_vencido = df_fixas_f[df_fixas_f['Status'].isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
+if not df_fixas_f.empty:
+    col_val_fix = find_column(df_fixas_f, ['Valor', 'Valor (R$)'])
+    col_status_fix = find_column(df_fixas_f, ['Status'])
+    if col_val_fix:
+        df_fixas_f['VALOR_CLEAN'] = df_fixas_f[col_val_fix].apply(parse_currency)
+        if col_status_fix:
+            custo_fixo_pago = df_fixas_f[df_fixas_f[col_status_fix] == 'PAGO']['VALOR_CLEAN'].sum()
+            fixo_vencido = df_fixas_f[df_fixas_f[col_status_fix].isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
 resultado_liquido = receita_real - (custo_var_pago + custo_fixo_pago)
 total_vencido_pendente = var_vencido + fixo_vencido
@@ -199,7 +207,7 @@ total_vencido_pendente = var_vencido + fixo_vencido
 st.title(f"📊 Gestão Financeira Real — {cliente_info['nome']}")
 st.caption(f"Filtro Ativo: **{periodo_selecionado}**")
 
-# KPI Cards Reais
+# KPI Cards
 col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
@@ -216,7 +224,7 @@ with col5:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# AGENDA FINANCEIRA (ATRASADOS INCONDICIONAIS + SEMANA VIGENTE / CALENDÁRIO)
+# AGENDA FINANCEIRA
 # -----------------------------------------------------------------------------
 st.subheader("📅 Agenda Financeira (Atrasados + Semana Vigente / Calendário)")
 
@@ -242,16 +250,22 @@ with ag_col2:
     else:
         st.info(f"📆 **Semana Vigente:** {start_current_week.strftime('%d/%m/%Y')} até {end_current_week.strftime('%d/%m/%Y')}")
 
-# Unificar pendências
-df_agenda_var = df_var[df_var['Status'].isin(['VENCIDO', 'PENDENTE'])].copy() if not df_var.empty and 'Status' in df_var.columns else pd.DataFrame()
-df_agenda_fix = df_fixas[df_fixas['Status'].isin(['VENCIDO', 'PENDENTE'])].copy() if not df_fixas.empty and 'Status' in df_fixas.columns else pd.DataFrame()
+# Unificação de pendências
+col_status_var_all = find_column(df_var, ['Status'])
+col_status_fix_all = find_column(df_fixas, ['Status'])
+
+df_agenda_var = df_var[df_var[col_status_var_all].isin(['VENCIDO', 'PENDENTE'])].copy() if not df_var.empty and col_status_var_all else pd.DataFrame()
+df_agenda_fix = df_fixas[df_fixas[col_status_fix_all].isin(['VENCIDO', 'PENDENTE'])].copy() if not df_fixas.empty and col_status_fix_all else pd.DataFrame()
 
 df_agenda = pd.concat([df_agenda_var, df_agenda_fix], ignore_index=True)
 
-if not df_agenda.empty and 'Vencimento' in df_agenda.columns:
-    df_agenda['VENC_DT'] = parse_any_date(df_agenda['Vencimento'])
+col_venc = find_column(df_agenda, ['Vencimento', 'Data de Pagamento'])
+col_status_ag = find_column(df_agenda, ['Status'])
+
+if not df_agenda.empty and col_venc:
+    df_agenda['VENC_DT'] = parse_any_date(df_agenda[col_venc])
     
-    cond_vencidos = (df_agenda['Status'] == 'VENCIDO')
+    cond_vencidos = (df_agenda[col_status_ag] == 'VENCIDO') if col_status_ag else False
     
     if modo_agenda == "Semana Atual Vigente":
         cond_datas = (df_agenda['VENC_DT'] >= pd.to_datetime(start_current_week)) & (df_agenda['VENC_DT'] <= pd.to_datetime(end_current_week))
@@ -263,18 +277,19 @@ if not df_agenda.empty and 'Vencimento' in df_agenda.columns:
 
     df_agenda_filtered = df_agenda[cond_vencidos | cond_datas].copy()
     
-    if not df_agenda_filtered.empty:
-        df_agenda_filtered['Valor (R$)'] = df_agenda_filtered['Valor'].apply(lambda x: format_brl(parse_currency(x)))
+    col_val_ag = find_column(df_agenda_filtered, ['Valor', 'Valor (R$)'])
+    if not df_agenda_filtered.empty and col_val_ag:
+        df_agenda_filtered['Valor (R$)'] = df_agenda_filtered[col_val_ag].apply(lambda x: format_brl(parse_currency(x)))
         cols_show = [c for c in ['Vencimento', 'Fornecedor', 'Descrição', 'Categoria', 'Valor (R$)', 'Status'] if c in df_agenda_filtered.columns]
         
         st.dataframe(
             df_agenda_filtered[cols_show].style.map(
                 lambda v: 'color: red; font-weight: bold;' if v == 'VENCIDO' else 'color: orange; font-weight: bold;',
-                subset=['Status']
+                subset=['Status'] if 'Status' in cols_show else []
             ),
             use_container_width=True
         )
-        total_agenda = df_agenda_filtered['Valor'].apply(parse_currency).sum()
+        total_agenda = df_agenda_filtered[col_val_ag].apply(parse_currency).sum()
         st.error(f"⚠️ **Total de Compromissos Exibidos na Agenda:** {format_brl(total_agenda)}")
     else:
         st.success("✅ **Nenhum compromisso pendente ou vencido para os critérios selecionados.**")
@@ -317,8 +332,9 @@ st.subheader("📋 Lançamentos de Contas Variáveis (Tabela Real do Período)")
 
 if not df_var_f.empty:
     df_var_display = df_var_f.copy()
-    if 'Valor' in df_var_display.columns:
-        df_var_display['Valor (R$)'] = df_var_display['Valor'].apply(lambda x: format_brl(parse_currency(x)))
+    col_val_disp = find_column(df_var_display, ['Valor', 'Valor (R$)'])
+    if col_val_disp:
+        df_var_display['Valor (R$)'] = df_var_display[col_val_disp].apply(lambda x: format_brl(parse_currency(x)))
     st.dataframe(df_var_display, use_container_width=True)
 else:
     st.info("Nenhum lançamento encontrado na aba CONTAS VARIAVEIS para este período.")
