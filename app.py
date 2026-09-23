@@ -4,14 +4,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-# Configuração da página
+# Configuração da página e tema visual do SaaS
 st.set_page_config(
-    page_title="Portal BPO Financeiro | Agenda & BI Reais",
+    page_title="Portal BPO Financeiro | Agenda & Analytics",
     page_icon="📊",
     layout="wide"
 )
 
-# Estilização CSS Customizada
+# Estilização CSS Customizada (Visual SaaS Moderno)
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -29,7 +29,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# MAPEAMENTO DE UNIDADES
+# MULTI-TENANT CONFIGURATION (Mapeamento das Unidades)
 # -----------------------------------------------------------------------------
 CLIENT_DATABASE = {
     "cliente_tere": {
@@ -42,6 +42,7 @@ CLIENT_DATABASE = {
     }
 }
 
+# Funções auxiliares de limpeza e formatação monetária
 def clean_money(val):
     if pd.isna(val): return 0.0
     val_str = str(val).replace('R$', '').replace('.', '').replace(',', '.').strip()
@@ -53,6 +54,7 @@ def clean_money(val):
 def format_brl(val):
     return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+# Carregamento dinâmico direto das abas operacionais do Google Sheets
 @st.cache_data(ttl=120)
 def load_operational_data(sheet_id):
     def get_df(sheet_name):
@@ -71,9 +73,9 @@ def load_operational_data(sheet_id):
     return df_extrato, df_var, df_fixas
 
 # -----------------------------------------------------------------------------
-# SIDEBAR
+# SIDEBAR - SELEÇÃO DE EMPRESA E REGRAS
 # -----------------------------------------------------------------------------
-st.sidebar.title("🏢 BPO Financeiro Real")
+st.sidebar.title("🏢 BPO Financeiro SaaS")
 st.sidebar.markdown("---")
 
 cliente_selected_key = st.sidebar.selectbox(
@@ -85,10 +87,10 @@ cliente_selected_key = st.sidebar.selectbox(
 cliente_info = CLIENT_DATABASE[cliente_selected_key]
 st.sidebar.success(f"Conectado: **{cliente_info['nome']}**")
 
-# Carregar dados transacionais
+# Carregar dados reais das abas operacionais
 df_extrato, df_var, df_fixas = load_operational_data(cliente_info['sheet_id'])
 
-# Tratar valores numéricos das tabelas
+# Ajustar e formatar valores numéricos
 if not df_var.empty and 'Valor' in df_var.columns:
     df_var['Valor_Float'] = df_var['Valor'].apply(clean_money)
     df_var['Valor (R$)'] = df_var['Valor_Float'].apply(format_brl)
@@ -98,7 +100,7 @@ if not df_fixas.empty and 'Valor' in df_fixas.columns:
     df_fixas['Valor (R$)'] = df_fixas['Valor_Float'].apply(format_brl)
 
 # -----------------------------------------------------------------------------
-# PROCESSAMENTO DE DADOS REAIS
+# PROCESSAMENTO DOS INDICADORES REAIS DE CAIXA E DRE
 # -----------------------------------------------------------------------------
 receita_real = 0.0
 if not df_extrato.empty:
@@ -114,12 +116,13 @@ resultado_liquido = receita_real - (custo_var_pago + custo_fixo_pago)
 # -----------------------------------------------------------------------------
 # PAINEL PRINCIPAL
 # -----------------------------------------------------------------------------
-st.title(f"📊 Gestão Financeira Reais — {cliente_info['nome']}")
+st.title(f"📊 Gestão Financeira Real — {cliente_info['nome']}")
+st.caption("Dados calculados diretamente dos lançamentos das abas de Extrato, Contas Fixas e Contas Variáveis.")
 
 # KPI Cards
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.markdown(f'<div class="kpi-card"><div class="kpi-title">Entradas Reais (Extrato)</div><div class="kpi-value">{format_brl(receita_real)}</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi-card"><div class="kpi-title">Entradas (Extrato)</div><div class="kpi-value">{format_brl(receita_real)}</div></div>', unsafe_allow_html=True)
 with col2:
     st.markdown(f'<div class="kpi-card" style="border-left-color: #EF4444;"><div class="kpi-title">Saídas Variáveis Pagas</div><div class="kpi-value">{format_brl(custo_var_pago)}</div></div>', unsafe_allow_html=True)
 with col3:
@@ -130,11 +133,10 @@ with col4:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# AGENDA FINANCEIRA SEMANAL (VENCIDOS E PENDENTES A PAGAR)
+# AGENDA FINANCEIRA SEMANAL (CONTAS VENCIDAS E PENDENTES A PAGAR)
 # -----------------------------------------------------------------------------
 st.subheader("📅 Agenda Financeira Semanal (Contas Vencidas e Pendentes a Pagar)")
 
-# Unir vencidos e pendentes de variáveis e fixas
 df_agenda_var = df_var[df_var['Status'].isin(['VENCIDO', 'PENDENTE'])].copy() if not df_var.empty and 'Status' in df_var.columns else pd.DataFrame()
 df_agenda_fix = df_fixas[df_fixas['Status'].isin(['VENCIDO', 'PENDENTE'])].copy() if not df_fixas.empty and 'Status' in df_fixas.columns else pd.DataFrame()
 
@@ -143,7 +145,6 @@ df_agenda = pd.concat([df_agenda_var, df_agenda_fix], ignore_index=True)
 if not df_agenda.empty:
     cols_display = [c for c in ['Vencimento', 'Fornecedor', 'Descrição', 'Categoria', 'Valor (R$)', 'Status'] if c in df_agenda.columns]
     
-    # Exibição formatada
     st.dataframe(
         df_agenda[cols_display].style.map(
             lambda v: 'color: red; font-weight: bold;' if v == 'VENCIDO' else 'color: orange; font-weight: bold;',
@@ -158,13 +159,13 @@ else:
     st.success("✅ **Nenhuma conta vencida ou pendente para esta semana.**")
 
 # -----------------------------------------------------------------------------
-# TABELA COMPLETA DE LANÇAMENTOS
+# TABELA DETALHADA COMPLETA (FORMATADA EM MOEDA)
 # -----------------------------------------------------------------------------
 st.markdown("---")
-st.subheader("📋 Gestão Detalhada de Lançamentos (Todas as Contas Variáveis)")
+st.subheader("📋 Gestão Detalhada de Lançamentos (Contas Variáveis)")
 
 if not df_var.empty:
-    cols_var_show = [c for c in ['Vencimento', 'Data de Pagamento', 'Fornecedor', 'Descrição', 'Categoria', 'Valor (R$)', 'Status', 'CONCILIATION BANCARIA'] if c in df_var.columns]
+    cols_var_show = [c for c in ['Vencimento', 'Data de Pagamento', 'Fornecedor', 'Descrição', 'Categoria', 'Valor (R$)', 'Status', 'CONCILIAÇÃO BANCARIA'] if c in df_var.columns]
     if not cols_var_show:
         cols_var_show = [c for c in df_var.columns if c != 'Valor_Float']
     
