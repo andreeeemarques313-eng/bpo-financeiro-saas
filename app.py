@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 # Configuração da página
 st.set_page_config(
-    page_title="Portal BPO Financeiro | Agenda & BI Reais",
+    page_title="Portal BPO Financeiro | BI Operacional",
     page_icon="📊",
     layout="wide"
 )
@@ -47,7 +47,7 @@ CLIENT_DATABASE = {
 }
 
 # -----------------------------------------------------------------------------
-# FUNÇÕES DE TRATAMENTO DE MOEDA E LEITURA DE DADOS
+# TRATAMENTO MONETÁRIO RIGOROSO
 # -----------------------------------------------------------------------------
 def parse_currency(val):
     if pd.isna(val): return 0.0
@@ -65,10 +65,14 @@ def parse_currency(val):
 def format_brl(val):
     return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-@st.cache_data(ttl=30)
+# -----------------------------------------------------------------------------
+# LEITURA COMPLETA (DESDE A LINHA 2) VIA ENDPOINT EXPORT
+# -----------------------------------------------------------------------------
+@st.cache_data(ttl=60)
 def load_operational_data(sheet_id):
     def get_df(s_id, sheet_name):
-        url = f"https://docs.google.com/spreadsheets/d/{s_id}/gviz/tq?tqx=out:csv&sheet={sheet_name.replace(' ', '%20')}"
+        # Endpoint de exportação completa sem limite de linhas
+        url = f"https://docs.google.com/spreadsheets/d/{s_id}/export?format=csv&sheet={sheet_name.replace(' ', '%20')}"
         try:
             df = pd.read_csv(url)
             df.columns = df.columns.str.strip()
@@ -101,13 +105,14 @@ cliente_selected_key = st.sidebar.selectbox(
 cliente_info = CLIENT_DATABASE[cliente_selected_key]
 st.sidebar.success(f"Conectado: **{cliente_info['nome']}**")
 
-st.sidebar.markdown("### 🔍 Filtro de Período")
+st.sidebar.markdown("### 🔍 Filtro de Período Mês a Mês")
 periodo_opcoes = ["Setembro/2026", "Agosto/2026", "Julho/2026", "CONSOLIDADO DO ANO (2026)"]
-periodo_selecionado = st.sidebar.selectbox("Competência:", periodo_opcoes)
+periodo_selecionado = st.sidebar.selectbox("Competência / Filtro:", periodo_opcoes)
 
-# Carregamento dos dados
+# Carregamento Integral de Dados
 df_extrato, df_var, df_fixas = load_operational_data(cliente_info['sheet_id'])
 
+# Função de filtragem de datas
 def filter_by_period(df, date_col):
     if df.empty or date_col not in df.columns:
         return df
@@ -126,16 +131,14 @@ df_var_f = filter_by_period(df_var, 'Vencimento')
 df_fixas_f = filter_by_period(df_fixas, 'Vencimento')
 
 # -----------------------------------------------------------------------------
-# PROCESSAMENTO DOS KPIS REAIS
+# PROCESSAMENTO DE VALORES REAIS DAS ABAS (DESDE A LINHA 2)
 # -----------------------------------------------------------------------------
 receita_real = 0.0
 if not df_extrato_f.empty:
     col_valor = [c for c in df_extrato_f.columns if 'VALOR' in c.upper() or 'BANCO' in c.upper()]
     if col_valor:
         vals = df_extrato_f[col_valor[0]].apply(parse_currency)
-        receita_real = vals[vals > 0].sum()
-        if cliente_selected_key == "cliente_tere" and periodo_selecionado == "Setembro/2026" and receita_real < 29869.40:
-            receita_real = 29869.40
+        receita_real = vals[vals > 0].sum() # Soma de todas as entradas de crédito do mês
 
 custo_var_pago = df_var_f[df_var_f['Status'] == 'PAGO']['Valor'].apply(parse_currency).sum() if not df_var_f.empty and 'Valor' in df_var_f.columns and 'Status' in df_var_f.columns else 0.0
 custo_fixo_pago = df_fixas_f[df_fixas_f['Status'] == 'PAGO']['Valor'].apply(parse_currency).sum() if not df_fixas_f.empty and 'Valor' in df_fixas_f.columns and 'Status' in df_fixas_f.columns else 0.0
@@ -150,9 +153,9 @@ total_vencido_pendente = var_vencido + fixo_vencido
 # PAINEL PRINCIPAL
 # -----------------------------------------------------------------------------
 st.title(f"📊 Gestão Financeira Real — {cliente_info['nome']}")
-st.caption(f"Filtro Ativo: **{periodo_selecionado}**")
+st.caption(f"Filtro Selecionado: **{periodo_selecionado}** | Leitura completa das abas operacionais")
 
-# KPI Cards
+# KPI Cards Reais
 col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
@@ -169,11 +172,10 @@ with col5:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# AGENDA FINANCEIRA SEMANAL E CALENDÁRIO PERSONALIZADO
+# AGENDA FINANCEIRA SEMANAL + ATRASADOS INCONDICIONAIS + CALENDÁRIO
 # -----------------------------------------------------------------------------
-st.subheader("📅 Agenda Financeira (Vencidos + Semana Vigente / Calendário)")
+st.subheader("📅 Agenda Financeira (Atrasados + Semana Vigente / Calendário)")
 
-# Filtros da Agenda
 ag_col1, ag_col2 = st.columns([4, 6])
 
 today = datetime.today()
@@ -182,7 +184,7 @@ end_current_week = start_current_week + timedelta(days=6)
 
 with ag_col1:
     modo_agenda = st.radio(
-        "Modo de Visualização da Agenda:",
+        "Modo de Exibição da Agenda:",
         options=["Semana Atual Vigente", "Selecionar Período no Calendário"],
         horizontal=True
     )
@@ -190,7 +192,7 @@ with ag_col1:
 with ag_col2:
     if modo_agenda == "Selecionar Período no Calendário":
         dates_selected = st.date_input(
-            "Selecione o intervalo de datas:",
+            "Selecione o intervalo no calendário:",
             value=(start_current_week.date(), end_current_week.date())
         )
     else:
@@ -206,8 +208,8 @@ if not df_agenda.empty and 'Vencimento' in df_agenda.columns:
     df_agenda['VENC_DT'] = pd.to_datetime(df_agenda['Vencimento'], errors='coerce')
     
     # REGRA DA AGENDA:
-    # 1. Todos os 'VENCIDO' aparecem INDEPENDENTE DA DATA
-    # 2. Todos os 'PENDENTE' entram conforme a semana atual OU o calendário selecionado
+    # 1. Todos os 'VENCIDO' aparecem INCONDICIONALMENTE (independente da data)
+    # 2. Todos os 'PENDENTE' entram dentro da janela da semana atual ou do calendário
     cond_vencidos = (df_agenda['Status'] == 'VENCIDO')
     
     if modo_agenda == "Semana Atual Vigente":
@@ -241,9 +243,9 @@ else:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# VISUALIZAÇÃO GRÁFICA MÊS A MÊS DA DRE REAL
+# GRÁFICOS E TABELA OPERACIONAL
 # -----------------------------------------------------------------------------
-st.subheader("📈 Comparativo de Caixa e Operação do Período")
+st.subheader("📈 Comparativo Mês a Mês das Operações")
 
 g_col1, g_col2 = st.columns([6, 4])
 
@@ -269,7 +271,6 @@ with g_col2:
         fig_pie.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=20))
         st.plotly_chart(fig_pie, use_container_width=True)
 
-# Tabela Operacional de Lançamentos
 st.markdown("---")
 st.subheader("📋 Lançamentos de Contas Variáveis (Tabela Real do Período)")
 
