@@ -72,7 +72,7 @@ def parse_any_date(series):
     return pd.to_datetime(clean_series, dayfirst=True, errors='coerce')
 
 def find_column(df, possible_names):
-    """Busca uma coluna no dataframe de forma insensível a maiúsculas/espaços"""
+    """Busca uma coluna no dataframe de forma flexível"""
     if df.empty:
         return None
     cols_clean = {str(c).strip().lower(): c for c in df.columns}
