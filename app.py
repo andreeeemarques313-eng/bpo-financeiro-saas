@@ -47,31 +47,49 @@ CLIENT_DATABASE = {
 }
 
 # -----------------------------------------------------------------------------
-# TRATAMENTO MONETÁRIO RIGOROSO
+# FUNÇÕES ROBUSTAS DE TRATAMENTO DE MOEDA E DATAS MISTAS
 # -----------------------------------------------------------------------------
 def parse_currency(val):
     if pd.isna(val): return 0.0
-    val_str = str(val).strip().replace('R$', '').strip()
-    if not val_str: return 0.0
-    if ',' in val_str and '.' in val_str:
-        val_str = val_str.replace('.', '').replace(',', '.')
-    elif ',' in val_str:
-        val_str = val_str.replace(',', '.')
+    s = str(val).strip().replace('R$', '').replace(' ', '').strip()
+    if not s or s == '-': return 0.0
+    if ',' in s and '.' in s:
+        s = s.replace('.', '').replace(',', '.')
+    elif ',' in s:
+        s = s.replace(',', '.')
     try:
-        return float(val_str)
+        return float(s)
     except:
         return 0.0
 
 def format_brl(val):
     return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+def parse_dates_robust(series):
+    res = pd.to_datetime(series, dayfirst=True, errors='coerce')
+    mask_nat = res.isna()
+    if mask_nat.any():
+        month_map = {'jan': 1, 'fev': 2, 'mar': 3, 'abr': 4, 'mai': 5, 'jun': 6,
+                     'jul': 7, 'ago': 8, 'set': 9, 'out': 10, 'nov': 11, 'dez': 12}
+        def map_str(s):
+            if pd.isna(s): return pd.NaT
+            s_str = str(s).lower().strip()
+            for m_name, m_num in month_map.items():
+                if m_name in s_str:
+                    parts = s_str.split('-')
+                    if len(parts) > 1:
+                        yr = int('20' + parts[1].strip()) if len(parts[1].strip()) == 2 else int(parts[1].strip())
+                        return pd.Timestamp(year=yr, month=m_num, day=1)
+            return pd.NaT
+        res[mask_nat] = series[mask_nat].apply(map_str)
+    return res
+
 # -----------------------------------------------------------------------------
-# LEITURA COMPLETA (DESDE A LINHA 2) VIA ENDPOINT EXPORT
+# LEITURA DAS ABAS OPERACIONAIS
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def load_operational_data(sheet_id):
     def get_df(s_id, sheet_name):
-        # Endpoint de exportação completa sem limite de linhas
         url = f"https://docs.google.com/spreadsheets/d/{s_id}/export?format=csv&sheet={sheet_name.replace(' ', '%20')}"
         try:
             df = pd.read_csv(url)
@@ -109,42 +127,68 @@ st.sidebar.markdown("### 🔍 Filtro de Período Mês a Mês")
 periodo_opcoes = ["Setembro/2026", "Agosto/2026", "Julho/2026", "CONSOLIDADO DO ANO (2026)"]
 periodo_selecionado = st.sidebar.selectbox("Competência / Filtro:", periodo_opcoes)
 
-# Carregamento Integral de Dados
+# Carregamento Integral dos Dados
 df_extrato, df_var, df_fixas = load_operational_data(cliente_info['sheet_id'])
 
-# Função de filtragem de datas
-def filter_by_period(df, date_col):
-    if df.empty or date_col not in df.columns:
+# -----------------------------------------------------------------------------
+# FILTRAGEM INTELIGENTE POR MÊS E ANO
+# -----------------------------------------------------------------------------
+def filter_dataframe_by_period(df, primary_date_col, secondary_date_col=None):
+    if df.empty:
         return df
-    df['DATA_PARSED'] = pd.to_datetime(df[date_col], errors='coerce')
-    if periodo_selecionado == "Setembro/2026":
-        return df[(df['DATA_PARSED'].dt.month == 9) & (df['DATA_PARSED'].dt.year == 2026)]
-    elif periodo_selecionado == "Agosto/2026":
-        return df[(df['DATA_PARSED'].dt.month == 8) & (df['DATA_PARSED'].dt.year == 2026)]
-    elif periodo_selecionado == "Julho/2026":
-        return df[(df['DATA_PARSED'].dt.month == 7) & (df['DATA_PARSED'].dt.year == 2026)]
+    
+    # Determina a melhor coluna de data disponível
+    date_series = None
+    if primary_date_col in df.columns:
+        date_series = df[primary_date_col]
+    elif secondary_date_col and secondary_date_col in df.columns:
+        date_series = df[secondary_date_col]
+    elif 'Competência' in df.columns:
+        date_series = df['Competência']
     else:
-        return df[df['DATA_PARSED'].dt.year == 2026]
+        return df
 
-df_extrato_f = filter_by_period(df_extrato, 'DATA')
-df_var_f = filter_by_period(df_var, 'Vencimento')
-df_fixas_f = filter_by_period(df_fixas, 'Vencimento')
+    parsed_dates = parse_dates_robust(date_series)
+    df['DATA_PARSED_TEMP'] = parsed_dates
+
+    if periodo_selecionado == "Setembro/2026":
+        return df[(df['DATA_PARSED_TEMP'].dt.month == 9) & (df['DATA_PARSED_TEMP'].dt.year == 2026)]
+    elif periodo_selecionado == "Agosto/2026":
+        return df[(df['DATA_PARSED_TEMP'].dt.month == 8) & (df['DATA_PARSED_TEMP'].dt.year == 2026)]
+    elif periodo_selecionado == "Julho/2026":
+        return df[(df['DATA_PARSED_TEMP'].dt.month == 7) & (df['DATA_PARSED_TEMP'].dt.year == 2026)]
+    else: # Consolidado Ano 2026
+        return df[df['DATA_PARSED_TEMP'].dt.year == 2026]
+
+df_extrato_f = filter_dataframe_by_period(df_extrato, 'DATA')
+df_var_f = filter_dataframe_by_period(df_var, 'Data de Pagamento', 'Vencimento')
+df_fixas_f = filter_dataframe_by_period(df_fixas, 'Data de Pagamento', 'Vencimento')
 
 # -----------------------------------------------------------------------------
-# PROCESSAMENTO DE VALORES REAIS DAS ABAS (DESDE A LINHA 2)
+# PROCESSAMENTO DOS VALORES REAIS DAS ABAS
 # -----------------------------------------------------------------------------
 receita_real = 0.0
 if not df_extrato_f.empty:
-    col_valor = [c for c in df_extrato_f.columns if 'VALOR' in c.upper() or 'BANCO' in c.upper()]
+    col_valor = [c for c in df_extrato_f.columns if 'BANCO' in c.upper() or 'VALOR' in c.upper()]
     if col_valor:
         vals = df_extrato_f[col_valor[0]].apply(parse_currency)
-        receita_real = vals[vals > 0].sum() # Soma de todas as entradas de crédito do mês
+        receita_real = vals[vals > 0].sum()
 
-custo_var_pago = df_var_f[df_var_f['Status'] == 'PAGO']['Valor'].apply(parse_currency).sum() if not df_var_f.empty and 'Valor' in df_var_f.columns and 'Status' in df_var_f.columns else 0.0
-custo_fixo_pago = df_fixas_f[df_fixas_f['Status'] == 'PAGO']['Valor'].apply(parse_currency).sum() if not df_fixas_f.empty and 'Valor' in df_fixas_f.columns and 'Status' in df_fixas_f.columns else 0.0
+custo_var_pago = 0.0
+var_vencido = 0.0
+if not df_var_f.empty and 'Valor' in df_var_f.columns:
+    df_var_f['VALOR_CLEAN'] = df_var_f['Valor'].apply(parse_currency)
+    if 'Status' in df_var_f.columns:
+        custo_var_pago = df_var_f[df_var_f['Status'] == 'PAGO']['VALOR_CLEAN'].sum()
+        var_vencido = df_var_f[df_var_f['Status'].isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
-var_vencido = df_var_f[df_var_f['Status'].isin(['VENCIDO', 'PENDENTE'])]['Valor'].apply(parse_currency).sum() if not df_var_f.empty and 'Valor' in df_var_f.columns and 'Status' in df_var_f.columns else 0.0
-fixo_vencido = df_fixas_f[df_fixas_f['Status'].isin(['VENCIDO', 'PENDENTE'])]['Valor'].apply(parse_currency).sum() if not df_fixas_f.empty and 'Valor' in df_fixas_f.columns and 'Status' in df_fixas_f.columns else 0.0
+custo_fixo_pago = 0.0
+fixo_vencido = 0.0
+if not df_fixas_f.empty and 'Valor' in df_fixas_f.columns:
+    df_fixas_f['VALOR_CLEAN'] = df_fixas_f['Valor'].apply(parse_currency)
+    if 'Status' in df_fixas_f.columns:
+        custo_fixo_pago = df_fixas_f[df_fixas_f['Status'] == 'PAGO']['VALOR_CLEAN'].sum()
+        fixo_vencido = df_fixas_f[df_fixas_f['Status'].isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
 resultado_liquido = receita_real - (custo_var_pago + custo_fixo_pago)
 total_vencido_pendente = var_vencido + fixo_vencido
@@ -153,7 +197,7 @@ total_vencido_pendente = var_vencido + fixo_vencido
 # PAINEL PRINCIPAL
 # -----------------------------------------------------------------------------
 st.title(f"📊 Gestão Financeira Real — {cliente_info['nome']}")
-st.caption(f"Filtro Selecionado: **{periodo_selecionado}** | Leitura completa das abas operacionais")
+st.caption(f"Filtro Selecionado: **{periodo_selecionado}** | Leitura automática do Extrato, Contas Fixas e Variáveis")
 
 # KPI Cards Reais
 col1, col2, col3, col4, col5 = st.columns(5)
@@ -172,7 +216,7 @@ with col5:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# AGENDA FINANCEIRA SEMANAL + ATRASADOS INCONDICIONAIS + CALENDÁRIO
+# AGENDA FINANCEIRA (ATRASADOS INCONDICIONAIS + SEMANA VIGENTE / CALENDÁRIO)
 # -----------------------------------------------------------------------------
 st.subheader("📅 Agenda Financeira (Atrasados + Semana Vigente / Calendário)")
 
@@ -198,18 +242,15 @@ with ag_col2:
     else:
         st.info(f"📆 **Semana Vigente:** {start_current_week.strftime('%d/%m/%Y')} até {end_current_week.strftime('%d/%m/%Y')}")
 
-# Processar Unificação de Pendências e Vencidos
+# Unificar pendências e vencidos
 df_agenda_var = df_var[df_var['Status'].isin(['VENCIDO', 'PENDENTE'])].copy() if not df_var.empty and 'Status' in df_var.columns else pd.DataFrame()
 df_agenda_fix = df_fixas[df_fixas['Status'].isin(['VENCIDO', 'PENDENTE'])].copy() if not df_fixas.empty and 'Status' in df_fixas.columns else pd.DataFrame()
 
 df_agenda = pd.concat([df_agenda_var, df_agenda_fix], ignore_index=True)
 
 if not df_agenda.empty and 'Vencimento' in df_agenda.columns:
-    df_agenda['VENC_DT'] = pd.to_datetime(df_agenda['Vencimento'], errors='coerce')
+    df_agenda['VENC_DT'] = parse_dates_robust(df_agenda['Vencimento'])
     
-    # REGRA DA AGENDA:
-    # 1. Todos os 'VENCIDO' aparecem INCONDICIONALMENTE (independente da data)
-    # 2. Todos os 'PENDENTE' entram dentro da janela da semana atual ou do calendário
     cond_vencidos = (df_agenda['Status'] == 'VENCIDO')
     
     if modo_agenda == "Semana Atual Vigente":
@@ -245,7 +286,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 # -----------------------------------------------------------------------------
 # GRÁFICOS E TABELA OPERACIONAL
 # -----------------------------------------------------------------------------
-st.subheader("📈 Comparativo Mês a Mês das Operações")
+st.subheader("📈 Resultado Financeiro Real do Período")
 
 g_col1, g_col2 = st.columns([6, 4])
 
