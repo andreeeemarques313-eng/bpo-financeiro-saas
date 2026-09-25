@@ -18,12 +18,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS com eliminação do header de dev, padronização do date_input e contraste total
+# Injeção CSS com foco cirúrgico no date_input, contraste e ocultação do header de dev
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=Zen+Dots&display=swap');
 
-    /* 1. OCULTAÇÃO DA BARRA SUPERIOR DE DESENVOLVEDOR (REMOVE SHARE, GITHUB E ÍCONES FANTASMAS) */
+    /* 1. OCULTAÇÃO DA BARRA SUPERIOR DE DESENVOLVEDOR (REMOVE SHARE, GITHUB E ÍCONES) */
     header[data-testid="stHeader"] {
         display: none !important;
         visibility: hidden !important;
@@ -200,19 +200,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. CONFIGURAÇÃO DE UNIDADES COM O GID 546478773 FIXADO DEFINITIVAMENTE
+# 2. CONFIGURAÇÃO DE UNIDADES — MULTI-TENANT COM GIDS FIXOS DEFINITIVOS
 # -----------------------------------------------------------------------------
 CLIENTES = {
     "Tere": {
         "nome": "Fiño House - Teresópolis (RJ)", 
         "id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw",
-        "gid_variaveis": "546478773",  # GID FIXO DEFINITIVO
+        "gid_variaveis": "546478773",   # GID FIXO RJ
         "logo_file": "LOGO FINO HOUSE.png"
     },
     "OB": {
         "nome": "Fiño House - Minas Gerais (OB)", 
         "id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw",
-        "gid_variaveis": "",
+        "gid_variaveis": "2112595527",  # GID FIXO MG FORNECIDO
         "logo_file": "LOGO FINO HOUSE.png"
     }
 }
@@ -304,7 +304,7 @@ def read_csv_safe(url):
 def download_tab_robust(sheet_id, target_kind, candidate_names, manual_gid=""):
     validator = is_valid_extrato if target_kind == "extrato" else is_valid_contas
 
-    # 1. Prioridade Absoluta: GID Direto (546478773)
+    # 1. Prioridade Absoluta: GID Direto Fixo ou Manual
     if manual_gid and str(manual_gid).strip().isdigit():
         gid_clean = str(manual_gid).strip()
         for u in [
@@ -315,7 +315,7 @@ def download_tab_robust(sheet_id, target_kind, candidate_names, manual_gid=""):
             if validator(df):
                 return df, f"GID ({gid_clean})"
 
-    # 2. Variações Nominais
+    # 2. Variações Nominais da Aba
     for name in candidate_names:
         for enc in [urllib.parse.quote(name), urllib.parse.quote_plus(name), name]:
             for u in [
@@ -354,7 +354,7 @@ def load_data_pipeline(sheet_id, manual_var_gid=""):
 st.sidebar.markdown("<div style='font-family: Zen Dots; font-size: 20px; color: #1B1C1D;'>K-BPO <span style='color: #EA3D07;'>•</span></div>", unsafe_allow_html=True)
 st.sidebar.caption("Gestão Financeira Estratégica")
 
-# Exibe o logo na barra lateral se existir o arquivo
+# Logo da Fiño House na barra lateral
 logo_path = CLIENTES["Tere"].get("logo_file", "")
 if os.path.exists(logo_path):
     st.sidebar.image(logo_path, use_column_width=True)
@@ -364,13 +364,13 @@ st.sidebar.markdown("---")
 unidade_chave = st.sidebar.selectbox("Unidade:", list(CLIENTES.keys()), format_func=lambda x: CLIENTES[x]["nome"])
 periodo_filtro = st.sidebar.selectbox("Competência:", ["Setembro/2026", "Agosto/2026", "CONSOLIDADO DO ANO (2026)"])
 
-# GID fixado nativamente (546478773)
+# GID dinâmico conforme a unidade selecionada (pré-preenchido automaticamente)
 default_gid = CLIENTES[unidade_chave].get("gid_variaveis", "")
 manual_var_gid = st.sidebar.text_input(
     "🔑 GID Contas Variáveis:",
     value=default_gid,
-    placeholder="Ex: 546478773",
-    help="O número do GID da aba CONTAS VARIAVEIS já está fixo nativamente."
+    placeholder="Ex: 546478773 ou 2112595527",
+    help="O GID desta unidade já está fixo nativamente."
 )
 
 data_ultimo_extrato = st.sidebar.date_input(
