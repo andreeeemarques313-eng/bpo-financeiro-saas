@@ -255,7 +255,6 @@ def parse_dates_robust(series):
         return pd.to_datetime(s, dayfirst=True, errors='coerce')
 
 def extrair_mes_inteligente(val):
-    """Identifica o mês mesmo se estiver em texto (Setembro, 09/2026, Set/26, 2026-09-01)."""
     if pd.isna(val):
         return None
     s = str(val).strip().upper()
@@ -404,7 +403,7 @@ st.sidebar.markdown("---")
 unidade_chave = st.sidebar.selectbox("Unidade:", list(CLIENTES.keys()), format_func=lambda x: CLIENTES[x]["nome"])
 periodo_filtro = st.sidebar.selectbox("Competência:", ["Setembro/2026", "Agosto/2026", "CONSOLIDADO DO ANO (2026)"])
 
-# GID fixo amarrado à chave da unidade (evita colisão de session_state)
+# GID fixo com isolamento de chave por unidade
 default_gid = CLIENTES[unidade_chave].get("gid_variaveis", "")
 manual_var_gid = st.sidebar.text_input(
     "🔑 GID Contas Variáveis:",
@@ -468,7 +467,7 @@ if not df_ext.empty:
             receita_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] > 0]['VALOR_NUM'].sum()
             saidas_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] < 0]['VALOR_NUM'].sum()
 
-# REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DA COMPETÊNCIA
+# REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DA COMPETÊNCIA (MOTOR DE ALTA TOLERÂNCIA)
 def process_contas_competencia(df):
     if df.empty: return 0.0, 0.0, 0.0, pd.DataFrame()
     c_comp = match_col(df, ['Competência', 'Competencia', 'COMPETENCIA', 'COMPETÊNCIA', 'MÊS', 'MES'])
@@ -481,32 +480,41 @@ def process_contas_competencia(df):
         s_pag = parse_dates_robust(df[c_pag]) if c_pag else pd.Series(index=df.index, dtype='datetime64[ns]')
         s_venc = parse_dates_robust(df[c_venc]) if c_venc else pd.Series(index=df.index, dtype='datetime64[ns]')
         
-        # Extração de mês inteligente por prioridades
-        mes_comp_series = df[c_comp].apply(extrair_mes_inteligente) if c_comp else pd.Series(index=df.index, dtype='object')
+        # 1. Extração do mês
+        mes_comp = df[c_comp].apply(extrair_mes_inteligente) if c_comp else pd.Series(index=df.index, dtype='object')
+        mes_pag = s_pag.dt.month
+        mes_venc = s_venc.dt.month
         
-        # Fallback de mês: Competência -> Data de Pagamento -> Vencimento
-        mes_final = mes_comp_series.fillna(s_pag.dt.month).fillna(s_venc.dt.month)
+        # Mês definitivo com prioridade de preenchimento
+        mes_final = mes_comp.fillna(mes_pag).fillna(mes_venc)
         
         df['DT_REF'] = s_pag.fillna(s_venc)
         df['VALOR_NUM'] = df[c_val].apply(clean_currency)
         df['ST_UP'] = df[c_st].astype(str).str.strip().str.upper()
         
-        # Filtro de mês ativo
+        # 2. Classificação tolerante a erros de digitação de status
+        status_pago = df['ST_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
+        status_vencido = df['ST_UP'].str.contains('VENC|ATRAS', regex=True, na=False) & (~status_pago)
+        status_pendente = df['ST_UP'].str.contains('PEND|ABERT|A VENCER', regex=True, na=False) & (~status_pago)
+        
+        # 3. Filtro por competência ativa
         if target_month:
-            cond = (mes_final == target_month)
+            # Uma conta paga pertence ao mês se a competência bater OU se a data de pagamento bater
+            cond_pago_mes = status_pago & ((mes_comp == target_month) | (mes_pag == target_month) | (mes_final == target_month))
+            cond_vencido_mes = status_vencido & (mes_final == target_month)
+            cond_pendente_mes = status_pendente & (mes_final == target_month)
+            cond_geral = (mes_final == target_month)
         else:
-            cond = pd.Series(True, index=df.index)
+            cond_pago_mes = status_pago
+            cond_vencido_mes = status_vencido
+            cond_pendente_mes = status_pendente
+            cond_geral = pd.Series(True, index=df.index)
             
-        df_f = df[cond].copy()
+        df_f = df[cond_geral].copy()
         
-        # Normalização ampla de status para eliminar falhas humanas de digitação
-        status_pago = df_f['ST_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
-        status_vencido = df_f['ST_UP'].str.contains('VENC|ATRAS', regex=True, na=False) & (~status_pago)
-        status_pendente = df_f['ST_UP'].str.contains('PEND|ABERT|A VENCER', regex=True, na=False) & (~status_pago)
-        
-        pago = df_f[status_pago]['VALOR_NUM'].sum()
-        vencido = df_f[status_vencido]['VALOR_NUM'].sum()
-        a_vencer = df_f[status_pendente]['VALOR_NUM'].sum()
+        pago = df[cond_pago_mes]['VALOR_NUM'].sum()
+        vencido = df[cond_vencido_mes]['VALOR_NUM'].sum()
+        a_vencer = df[cond_pendente_mes]['VALOR_NUM'].sum()
         
         return pago, vencido, a_vencer, df_f
     return 0.0, 0.0, 0.0, pd.DataFrame()
@@ -707,6 +715,11 @@ with g2:
 
 st.markdown("---")
 st.markdown("<div class='section-title'>BASE OPERACIONAL — LANÇAMENTOS DO PERÍODO</div>", unsafe_allow_html=True)
+if not df_var.empty:
+    with st.expander("🔍 Auditoria de Variáveis Carregadas (Diagnóstico da Planilha)", expanded=False):
+        st.caption("Visão bruta das colunas da planilha para conferência contábil:")
+        st.dataframe(df_var.head(15), use_container_width=True)
+
 if not df_var_f.empty:
     df_var_view = df_var_f.copy()
     c_v_show = match_col(df_var_view, ['Valor', 'Valor (R$)'])
