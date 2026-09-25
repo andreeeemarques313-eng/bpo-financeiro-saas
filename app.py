@@ -18,19 +18,26 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS com correção da barra superior (header), inputs de data e botões
+# Injeção CSS com foco cirúrgico no date_input e nos ícones da barra superior
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=Zen+Dots&display=swap');
 
-    /* 1. CORREÇÃO DA BARRA SUPERIOR (HEADER PRETO DO STREAMLIT) */
+    /* 1. CORREÇÃO DA BARRA SUPERIOR (HEADER E ÍCONES) */
     header[data-testid="stHeader"] {
         background-color: #FFFFFF !important;
         border-bottom: 1px solid #E5E7EB !important;
     }
     
-    header[data-testid="stHeader"] * {
+    header[data-testid="stHeader"] *,
+    header[data-testid="stHeader"] button,
+    header[data-testid="stHeader"] a,
+    header[data-testid="stHeader"] span {
         color: #1B1C1D !important;
+        fill: #1B1C1D !important;
+        stroke: #1B1C1D !important;
+        font-family: 'Poppins', sans-serif !important;
+        font-weight: 600 !important;
     }
 
     /* 2. FORÇA FUNDO BRANCO GERAL */
@@ -54,9 +61,12 @@ st.markdown("""
         font-weight: 600 !important;
     }
 
-    /* 4. CORREÇÃO DOS CAMPOS DE ENTRADA E DATA (SELECTBOX, INPUT E DATEINPUT) */
+    /* 4. PADRONIZAÇÃO TOTAL DE TODOS OS INPUTS (INCLUINDO DATE INPUT) */
     div[data-baseweb="select"] > div,
     div[data-baseweb="input"] > div,
+    div[data-baseweb="input"],
+    div[data-testid="stDateInput"] > div,
+    div[data-testid="stDateInput"] div[data-baseweb="input"] > div,
     div[data-testid="stDateInput"] input,
     input, select, textarea {
         background-color: #FFFFFF !important;
@@ -66,11 +76,13 @@ st.markdown("""
         font-weight: 500 !important;
     }
 
-    /* Força texto digitado e selecionado para preto */
+    /* Força texto digitado, números de data e ícones internos para preto */
+    div[data-testid="stDateInput"] *,
     div[data-baseweb="select"] *,
     div[data-baseweb="input"] * {
         color: #1B1C1D !important;
         background-color: #FFFFFF !important;
+        fill: #1B1C1D !important;
     }
 
     /* 5. CORREÇÃO DO BOTÃO NA BARRA LATERAL */
@@ -189,13 +201,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. CONFIGURAÇÃO DE UNIDADES COM O GID 546478773 FIXADO DEFINITIVAMENTE
+# 2. CONFIGURAÇÃO DE UNIDADES COM O GID 546478773 FIXADO
 # -----------------------------------------------------------------------------
 CLIENTES = {
     "Tere": {
         "nome": "Fiño House - Teresópolis (RJ)", 
         "id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw",
-        "gid_variaveis": "546478773",  # GID FIXO DEFINITIVO
+        "gid_variaveis": "546478773",  # GID FIXADO DEFINITIVAMENTE
         "logo_file": "LOGO FINO HOUSE.png"
     },
     "OB": {
@@ -353,7 +365,7 @@ st.sidebar.markdown("---")
 unidade_chave = st.sidebar.selectbox("Unidade:", list(CLIENTES.keys()), format_func=lambda x: CLIENTES[x]["nome"])
 periodo_filtro = st.sidebar.selectbox("Competência:", ["Setembro/2026", "Agosto/2026", "CONSOLIDADO DO ANO (2026)"])
 
-# GID fixado nativamente (pré-carregado com 546478773)
+# GID fixado nativamente (546478773)
 default_gid = CLIENTES[unidade_chave].get("gid_variaveis", "")
 manual_var_gid = st.sidebar.text_input(
     "🔑 GID Contas Variáveis:",
