@@ -79,7 +79,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. CONFIGURAÇÃO DE UNIDADES — MULTI-TENANT COM GIDS FIXOS DEFINITIVOS
+# 2. CONFIGURAÇÃO DE UNIDADES — MULTI-TENANT
 # -----------------------------------------------------------------------------
 CLIENTES = {
     "Tere": {
@@ -97,18 +97,24 @@ CLIENTES = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. PARSERS E TRATAMENTO DE DADOS (SUPORTE AO CÓDIGO NATIVO DO GOOGLE SHEETS)
+# 3. PARSERS E TRATAMENTO DE DADOS BLINDADO
 # -----------------------------------------------------------------------------
 def clean_currency(val):
-    if pd.isna(val): return 0.0
+    if val is None or pd.isna(val): return 0.0
     if isinstance(val, (int, float)): return float(val)
-    s = re.sub(r'[^\d.,-]', '', str(val))
+    
+    s_str = str(val).strip()
+    if not s_str or s_str.upper() in ['NAN', 'NONE', '-', '#REF!', '#N/A']: return 0.0
+    
+    # Extrai dígitos, pontos, vírgulas e sinal de menos
+    s = re.sub(r'[^\d.,-]', '', s_str)
     if not s or s == '-': return 0.0
     
     if '.' in s and ',' in s:
         if s.rfind(',') > s.rfind('.'): s = s.replace('.', '').replace(',', '.')
         else: s = s.replace(',', '')
-    elif ',' in s: s = s.replace(',', '.')
+    elif ',' in s:
+        s = s.replace(',', '.')
     try: return float(s)
     except: return 0.0
 
@@ -120,9 +126,8 @@ def parse_dates_robust(series):
     
     def parse_single_date(val):
         s = str(val).strip()
-        if not s or s in ['nan', 'None', 'NaT', '']: return pd.NaT
+        if not s or s.lower() in ['nan', 'none', 'nat', '']: return pd.NaT
         
-        # TRADUTOR DO FORMATO INTERNO DO GOOGLE SHEETS (Ex: Date(2026, 8, 16))
         m = re.match(r'Date\((\d+),\s*(\d+),\s*(\d+)\)', s, re.IGNORECASE)
         if m:
             y, mth, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -140,7 +145,6 @@ def extrair_mes_inteligente(val):
     s = str(val).strip().upper()
     if not s or s in ['NAN', 'NONE', '']: return None
     
-    # TRADUTOR DO FORMATO INTERNO DO GOOGLE SHEETS (Ex: DATE(2026, 8, 16))
     m_date = re.match(r'DATE\((\d+),\s*(\d+),\s*(\d+)\)', s)
     if m_date: return int(m_date.group(2)) + 1
     
@@ -160,7 +164,6 @@ def extrair_mes_inteligente(val):
     return None
 
 def normalize_dataframe(df):
-    """Garante que a linha de cabeçalhos correta seja identificada, mesmo que existam linhas vazias no topo."""
     if df.empty: return df
     cols_str = " ".join([str(c).upper() for c in df.columns])
     if "VALOR" in cols_str or "DATA" in cols_str or "VENCIMENTO" in cols_str or "FORNECEDOR" in cols_str:
@@ -204,7 +207,7 @@ def is_valid_contas(df):
     if df.empty or len(df.columns) < 3: return False
     cols = [str(c).strip().upper() for c in df.columns]
     if 'INDICADOR' in cols: return False
-    return any('VALOR' in c or 'VENCIMENTO' in c or 'FORNECEDOR' in c for c in cols)
+    return any('VALOR' in c for c in cols) or any('VENCIMENTO' in c for c in cols) or any('FORNECEDOR' in c for c in cols)
 
 # -----------------------------------------------------------------------------
 # 5. MOTOR DE DOWNLOAD COM LEITURA SEGURA
@@ -337,7 +340,7 @@ def process_contas_competencia(df):
     c_val = match_col(df, ['Valor', 'Valor (R$)', 'VALOR'])
     c_st = match_col(df, ['Status', 'Situação', 'STATUS'])
     
-    if c_val and c_st:
+    if c_val:
         s_pag = parse_dates_robust(df[c_pag]) if c_pag else pd.Series(index=df.index, dtype='datetime64[ns]')
         s_venc = parse_dates_robust(df[c_venc]) if c_venc else pd.Series(index=df.index, dtype='datetime64[ns]')
         
@@ -349,11 +352,16 @@ def process_contas_competencia(df):
         
         df['DT_REF'] = s_pag.fillna(s_venc)
         df['VALOR_NUM'] = df[c_val].apply(clean_currency)
-        df['ST_UP'] = df[c_st].astype(str).str.strip().str.upper()
         
-        status_pago = df['ST_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
-        status_vencido = df['ST_UP'].str.contains('VENC|ATRAS', regex=True, na=False) & (~status_pago)
-        status_pendente = df['ST_UP'].str.contains('PEND|ABERT|A VENCER', regex=True, na=False) & (~status_pago)
+        if c_st:
+            df['ST_UP'] = df[c_st].astype(str).str.strip().str.upper()
+            status_pago = df['ST_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
+            status_vencido = df['ST_UP'].str.contains('VENC|ATRAS', regex=True, na=False) & (~status_pago)
+            status_pendente = df['ST_UP'].str.contains('PEND|ABERT|A VENCER', regex=True, na=False) & (~status_pago)
+        else:
+            status_pago = pd.Series(True, index=df.index)
+            status_vencido = pd.Series(False, index=df.index)
+            status_pendente = pd.Series(False, index=df.index)
         
         if target_month:
             cond_pago_mes = status_pago & ((mes_comp == target_month) | (mes_pag == target_month) | (mes_final == target_month))
@@ -435,14 +443,18 @@ def extrair_pendencias(df, tipo):
     c_desc = match_col(df, ['Descrição', 'Descricao', 'Item', 'DESCRICAO'])
     c_cat = match_col(df, ['Categoria', 'CATEGORIA'])
     
-    if c_venc and c_val and c_st:
+    if c_venc and c_val:
         df_temp = df.copy()
         df_temp['VALOR_NUM'] = df_temp[c_val].apply(clean_currency)
         df_temp['VENC_DT'] = parse_dates_robust(df_temp[c_venc])
-        df_temp['STATUS_UP'] = df_temp[c_st].astype(str).str.strip().str.upper()
         
-        cond_pago = df_temp['STATUS_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
-        cond_aberto = df_temp['STATUS_UP'].str.contains('PEND|VENC|ATRAS|ABERT', regex=True, na=False) & (~cond_pago)
+        if c_st:
+            df_temp['STATUS_UP'] = df_temp[c_st].astype(str).str.strip().str.upper()
+            cond_pago = df_temp['STATUS_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
+            cond_aberto = df_temp['STATUS_UP'].str.contains('PEND|VENC|ATRAS|ABERT', regex=True, na=False) & (~cond_pago)
+        else:
+            cond_aberto = pd.Series(True, index=df_temp.index)
+            df_temp['STATUS_UP'] = 'PENDENTE'
         
         cond_dado_valido = df_temp['VENC_DT'].notna() & (df_temp['VALOR_NUM'] > 0)
         pendentes = df_temp[cond_aberto & cond_dado_valido].copy()
