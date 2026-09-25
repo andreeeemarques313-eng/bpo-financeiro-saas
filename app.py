@@ -18,26 +18,24 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Injeção CSS com foco cirúrgico no date_input e nos ícones da barra superior
+# CSS com eliminação do header de dev, padronização do date_input e contraste total
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=Zen+Dots&display=swap');
 
-    /* 1. CORREÇÃO DA BARRA SUPERIOR (HEADER E ÍCONES) */
+    /* 1. OCULTAÇÃO DA BARRA SUPERIOR DE DESENVOLVEDOR (REMOVE SHARE, GITHUB E ÍCONES FANTASMAS) */
     header[data-testid="stHeader"] {
-        background-color: #FFFFFF !important;
-        border-bottom: 1px solid #E5E7EB !important;
+        display: none !important;
+        visibility: hidden !important;
+        height: 0px !important;
     }
     
-    header[data-testid="stHeader"] *,
-    header[data-testid="stHeader"] button,
-    header[data-testid="stHeader"] a,
-    header[data-testid="stHeader"] span {
-        color: #1B1C1D !important;
-        fill: #1B1C1D !important;
-        stroke: #1B1C1D !important;
-        font-family: 'Poppins', sans-serif !important;
-        font-weight: 600 !important;
+    #MainMenu {
+        visibility: hidden !important;
+    }
+
+    footer {
+        visibility: hidden !important;
     }
 
     /* 2. FORÇA FUNDO BRANCO GERAL */
@@ -45,6 +43,7 @@ st.markdown("""
         background-color: #FFFFFF !important;
         font-family: 'Poppins', sans-serif !important;
         color: #1B1C1D !important;
+        padding-top: 10px !important;
     }
 
     /* 3. BARRA LATERAL */
@@ -201,13 +200,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. CONFIGURAÇÃO DE UNIDADES COM O GID 546478773 FIXADO
+# 2. CONFIGURAÇÃO DE UNIDADES COM O GID 546478773 FIXADO DEFINITIVAMENTE
 # -----------------------------------------------------------------------------
 CLIENTES = {
     "Tere": {
         "nome": "Fiño House - Teresópolis (RJ)", 
         "id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw",
-        "gid_variaveis": "546478773",  # GID FIXADO DEFINITIVAMENTE
+        "gid_variaveis": "546478773",  # GID FIXO DEFINITIVO
         "logo_file": "LOGO FINO HOUSE.png"
     },
     "OB": {
