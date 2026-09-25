@@ -18,19 +18,29 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS com controle total de contraste para inputs, botões, radios e textos
+# CSS com correção da barra superior (header), inputs de data e botões
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=Zen+Dots&display=swap');
 
-    /* Força fundo branco geral */
+    /* 1. CORREÇÃO DA BARRA SUPERIOR (HEADER PRETO DO STREAMLIT) */
+    header[data-testid="stHeader"] {
+        background-color: #FFFFFF !important;
+        border-bottom: 1px solid #E5E7EB !important;
+    }
+    
+    header[data-testid="stHeader"] * {
+        color: #1B1C1D !important;
+    }
+
+    /* 2. FORÇA FUNDO BRANCO GERAL */
     html, body, .stApp, [data-testid="stAppViewContainer"], .main {
         background-color: #FFFFFF !important;
         font-family: 'Poppins', sans-serif !important;
         color: #1B1C1D !important;
     }
 
-    /* BARRA LATERAL */
+    /* 3. BARRA LATERAL */
     [data-testid="stSidebar"] {
         background-color: #F8F9FA !important;
         border-right: 1px solid #E5E7EB !important;
@@ -38,14 +48,16 @@ st.markdown("""
 
     [data-testid="stSidebar"] label, 
     [data-testid="stSidebar"] p, 
-    [data-testid="stSidebar"] span {
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div {
         color: #1B1C1D !important;
         font-weight: 600 !important;
     }
 
-    /* CORREÇÃO DAS CAIXAS DE ENTRADA (INPUTS, SELECTBOX, DATE INPUT) */
+    /* 4. CORREÇÃO DOS CAMPOS DE ENTRADA E DATA (SELECTBOX, INPUT E DATEINPUT) */
     div[data-baseweb="select"] > div,
     div[data-baseweb="input"] > div,
+    div[data-testid="stDateInput"] input,
     input, select, textarea {
         background-color: #FFFFFF !important;
         color: #1B1C1D !important;
@@ -54,28 +66,35 @@ st.markdown("""
         font-weight: 500 !important;
     }
 
-    div[data-baseweb="select"] * {
+    /* Força texto digitado e selecionado para preto */
+    div[data-baseweb="select"] *,
+    div[data-baseweb="input"] * {
         color: #1B1C1D !important;
         background-color: #FFFFFF !important;
     }
 
-    /* CORREÇÃO DO BOTÃO NA BARRA LATERAL */
-    .stButton > button {
+    /* 5. CORREÇÃO DO BOTÃO NA BARRA LATERAL */
+    div[data-testid="stButton"] > button {
         background-color: #1B1C1D !important;
         color: #FFFFFF !important;
         border: 1px solid #1B1C1D !important;
         border-radius: 6px !important;
         font-family: 'Poppins', sans-serif !important;
         font-weight: 600 !important;
+        width: 100% !important;
+        padding: 10px 16px !important;
         transition: all 0.2s ease;
     }
-    .stButton > button:hover {
+    div[data-testid="stButton"] > button:hover {
         background-color: #EA3D07 !important;
         border-color: #EA3D07 !important;
         color: #FFFFFF !important;
     }
+    div[data-testid="stButton"] > button * {
+        color: #FFFFFF !important;
+    }
 
-    /* CORREÇÃO DOS TEXTOS DO RADIO BUTTON (SEMANA VIGENTE / PERSONALIZADO) */
+    /* 6. CORREÇÃO DOS TEXTOS DO RADIO BUTTON (SEMANA VIGENTE / PERSONALIZADO) */
     div[data-testid="stRadio"] label,
     div[data-testid="stRadio"] p,
     div[data-testid="stRadio"] span,
@@ -85,7 +104,7 @@ st.markdown("""
         font-weight: 500 !important;
     }
 
-    /* TÍTULOS EM ZEN DOTS */
+    /* 7. TÍTULOS EM ZEN DOTS */
     .brand-title {
         font-family: 'Zen Dots', cursive, sans-serif !important;
         font-size: 24px;
@@ -108,7 +127,7 @@ st.markdown("""
         margin-bottom: 12px;
     }
 
-    /* BANNER INFORMATIVO */
+    /* 8. BANNER INFORMATIVO */
     .update-banner {
         background-color: #F8F9FA !important;
         border: 1px solid #E5E7EB;
@@ -131,7 +150,7 @@ st.markdown("""
         display: inline-block;
     }
 
-    /* CAIXAS DE KPIS EM CINZA CLARO COM MÁXIMA NITIDEZ */
+    /* 9. CAIXAS DE KPIS EM CINZA CLARO COM MÁXIMA NITIDEZ */
     .kpi-card {
         background-color: #F1F2F4 !important;
         padding: 16px 14px;
@@ -170,13 +189,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. CONFIGURAÇÃO DE UNIDADES COM O GID FIXADO NATIVAMENTE
+# 2. CONFIGURAÇÃO DE UNIDADES COM O GID 546478773 FIXADO DEFINITIVAMENTE
 # -----------------------------------------------------------------------------
 CLIENTES = {
     "Tere": {
         "nome": "Fiño House - Teresópolis (RJ)", 
         "id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw",
-        "gid_variaveis": "546478773",  # GID FIXADO NATIVAMENTE
+        "gid_variaveis": "546478773",  # GID FIXO DEFINITIVO
         "logo_file": "LOGO FINO HOUSE.png"
     },
     "OB": {
@@ -274,7 +293,7 @@ def read_csv_safe(url):
 def download_tab_robust(sheet_id, target_kind, candidate_names, manual_gid=""):
     validator = is_valid_extrato if target_kind == "extrato" else is_valid_contas
 
-    # 1. Prioridade Absoluta: GID Direto
+    # 1. Prioridade Absoluta: GID Direto (546478773)
     if manual_gid and str(manual_gid).strip().isdigit():
         gid_clean = str(manual_gid).strip()
         for u in [
@@ -334,7 +353,7 @@ st.sidebar.markdown("---")
 unidade_chave = st.sidebar.selectbox("Unidade:", list(CLIENTES.keys()), format_func=lambda x: CLIENTES[x]["nome"])
 periodo_filtro = st.sidebar.selectbox("Competência:", ["Setembro/2026", "Agosto/2026", "CONSOLIDADO DO ANO (2026)"])
 
-# GID fixado nativamente (já pré-carregado com 546478773)
+# GID fixado nativamente (pré-carregado com 546478773)
 default_gid = CLIENTES[unidade_chave].get("gid_variaveis", "")
 manual_var_gid = st.sidebar.text_input(
     "🔑 GID Contas Variáveis:",
@@ -583,7 +602,7 @@ with g1:
         xaxis=dict(
             tickfont=dict(color="#1B1C1D", size=11, family="Poppins"),
             showline=True,
-            linecolor="#E2E4E8"
+            linecolor="#CBD5E1"
         ),
         yaxis=dict(
             tickfont=dict(color="#1B1C1D", size=11, family="Poppins"),
