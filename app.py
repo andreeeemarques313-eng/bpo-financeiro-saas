@@ -200,7 +200,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. CONFIGURAÇÃO DE UNIDADES — MULTI-TENANT COM GIDS FIXOS DEFINITIVOS
+# 2. CONFIGURAÇÃO DE UNIDADES — MULTI-TENANT COM GIDS FIXOS
 # -----------------------------------------------------------------------------
 CLIENTES = {
     "Tere": {
@@ -212,13 +212,13 @@ CLIENTES = {
     "OB": {
         "nome": "Fiño House - Minas Gerais (OB)", 
         "id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw",
-        "gid_variaveis": "2112595527",  # GID FIXO MG FORNECIDO
+        "gid_variaveis": "2112595527",  # GID FIXO MG
         "logo_file": "LOGO FINO HOUSE.png"
     }
 }
 
 # -----------------------------------------------------------------------------
-# 3. TRATAMENTO NUMÉRICO E CONVERSÃO
+# 3. TRATAMENTO NUMÉRICO E PARSERS AVANÇADOS
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if val is None or pd.isna(val):
@@ -253,6 +253,41 @@ def parse_dates_robust(series):
         return pd.to_datetime(s, format='mixed', dayfirst=True, errors='coerce')
     except:
         return pd.to_datetime(s, dayfirst=True, errors='coerce')
+
+def extrair_mes_competencia(val):
+    """Extrai o mês da competência aceitando datas ISO, BR, texto (Setembro, 09/2026, Set/26)."""
+    if pd.isna(val):
+        return None
+    s = str(val).strip().upper()
+    if not s or s in ['NAN', 'NONE', '']:
+        return None
+    
+    # Mapeamento textual
+    mapa_meses = {
+        'JAN': 1, 'FEV': 2, 'MAR': 3, 'ABR': 4, 'MAI': 5, 'JUN': 6,
+        'JUL': 7, 'AGO': 8, 'SET': 9, 'OUT': 10, 'NOV': 11, 'DEZ': 12
+    }
+    for abrev, num in mapa_meses.items():
+        if abrev in s:
+            return num
+
+    # Tenta parsing direto de data
+    try:
+        dt = pd.to_datetime(s, dayfirst=True, errors='coerce')
+        if pd.notna(dt):
+            return dt.month
+    except Exception:
+        pass
+    
+    # Busca por padrões como 08/2026 ou 09/2026
+    m = re.search(r'\b(0?[1-9]|1[0-2])[/.-]\d{2,4}\b', s)
+    if m:
+        try:
+            return int(m.group(1))
+        except:
+            pass
+
+    return None
 
 def match_col(df, candidates):
     if df.empty: return None
@@ -329,9 +364,17 @@ def download_tab_robust(sheet_id, target_kind, candidate_names, manual_gid=""):
     return pd.DataFrame(), None
 
 def load_data_pipeline(sheet_id, manual_var_gid=""):
-    ext_names = ["EXTRATO BANCARIO", "EXTRATO", "EXTRATO BANCÁRIO", "Extrato Bancario"]
-    var_names = ["CONTAS VARIAVEIS", "CONTAS VARIAVEIS ", "CONTAS VARIÁVEIS", "VARIAVEIS", "Contas Variaveis"]
-    fix_names = ["CONTAS FIXAS", "CONTAS FIXAS ", "FIXAS", "Contas Fixas"]
+    ext_names = [
+        "EXTRATO BANCARIO", "EXTRATO BANCARIO ", "EXTRATO", "EXTRATO ", 
+        "EXTRATO BANCÁRIO", "EXTRATO BANCÁRIO ", "Extrato Bancario"
+    ]
+    var_names = [
+        "CONTAS VARIAVEIS", "CONTAS VARIAVEIS ", "CONTAS VARIÁVEIS", "CONTAS VARIÁVEIS ",
+        "VARIAVEIS", "VARIÁVEIS", "Contas Variaveis"
+    ]
+    fix_names = [
+        "CONTAS FIXAS", "CONTAS FIXAS ", "FIXAS", "Contas Fixas"
+    ]
 
     df_ext, m_e = download_tab_robust(sheet_id, "extrato", ext_names)
     df_var, m_v = download_tab_robust(sheet_id, "variaveis", var_names, manual_var_gid)
@@ -364,7 +407,7 @@ st.sidebar.markdown("---")
 unidade_chave = st.sidebar.selectbox("Unidade:", list(CLIENTES.keys()), format_func=lambda x: CLIENTES[x]["nome"])
 periodo_filtro = st.sidebar.selectbox("Competência:", ["Setembro/2026", "Agosto/2026", "CONSOLIDADO DO ANO (2026)"])
 
-# GID dinâmico conforme a unidade selecionada (pré-preenchido automaticamente)
+# GID fixo dinâmico conforme a unidade ativa
 default_gid = CLIENTES[unidade_chave].get("gid_variaveis", "")
 manual_var_gid = st.sidebar.text_input(
     "🔑 GID Contas Variáveis:",
@@ -404,7 +447,7 @@ df_var = dados["variaveis"]
 df_fix = dados["fixas"]
 
 # -----------------------------------------------------------------------------
-# 7. PROCESSAMENTO FINANCEIRO
+# 7. PROCESSAMENTO FINANCEIRO COM ENGINE RESILIENTE
 # -----------------------------------------------------------------------------
 
 # REGRA 1: ENTRADAS EXCLUSIVAS DO EXTRATO BANCÁRIO
@@ -412,42 +455,61 @@ receita_extrato, saidas_extrato = 0.0, 0.0
 df_ext_filtro = pd.DataFrame()
 
 if not df_ext.empty:
-    c_dt_e = match_col(df_ext, ['DATA', 'DATA ', 'DATA DO LANÇAMENTO'])
+    c_dt_e = match_col(df_ext, ['DATA', 'DATA ', 'DATA DO LANÇAMENTO', 'DATA_LANCAMENTO'])
     c_val_e = match_col(df_ext, ['VALOR', 'VALOR (R$)', 'BANCO'])
     if c_dt_e and c_val_e:
         dt_s = parse_dates_robust(df_ext[c_dt_e])
         df_ext['VALOR_NUM'] = df_ext[c_val_e].apply(clean_currency)
         df_ext['DT_S'] = dt_s
-        cond = (dt_s.dt.month == target_month) & (dt_s.dt.year == 2026) if target_month else (dt_s.dt.year == 2026)
-        df_ext_filtro = df_ext[cond].copy()
+        
+        # Filtro com fallback de ano
+        cond_mes = (dt_s.dt.month == target_month) if target_month else True
+        cond_ano = (dt_s.dt.year == 2026) if (dt_s.dt.year == 2026).any() else True
+        df_ext_filtro = df_ext[cond_mes & cond_ano].copy()
+        
         if not df_ext_filtro.empty:
             receita_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] > 0]['VALOR_NUM'].sum()
             saidas_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] < 0]['VALOR_NUM'].sum()
 
-# REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DA COMPETÊNCIA
+# REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DA COMPETÊNCIA (COM PARSER MULTI-FORMATO)
 def process_contas_competencia(df):
     if df.empty: return 0.0, 0.0, 0.0, pd.DataFrame()
-    c_comp = match_col(df, ['Competência', 'Competencia'])
-    c_pag = match_col(df, ['Data de Pagamento', 'Pagamento'])
-    c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data'])
-    c_val = match_col(df, ['Valor', 'Valor (R$)'])
-    c_st = match_col(df, ['Status', 'Situação'])
+    c_comp = match_col(df, ['Competência', 'Competencia', 'COMPETENCIA', 'COMPETÊNCIA'])
+    c_pag = match_col(df, ['Data de Pagamento', 'Pagamento', 'DATA_PAGAMENTO', 'DATA PAGAMENTO'])
+    c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data', 'DATA_VENCIMENTO'])
+    c_val = match_col(df, ['Valor', 'Valor (R$)', 'VALOR'])
+    c_st = match_col(df, ['Status', 'Situação', 'STATUS', 'SITUACAO'])
     
     if c_val and c_st:
-        s_comp = parse_dates_robust(df[c_comp]) if c_comp else pd.Series(index=df.index, dtype='datetime64[ns]')
         s_pag = parse_dates_robust(df[c_pag]) if c_pag else pd.Series(index=df.index, dtype='datetime64[ns]')
         s_venc = parse_dates_robust(df[c_venc]) if c_venc else pd.Series(index=df.index, dtype='datetime64[ns]')
         
-        df['DT_REF'] = s_comp.fillna(s_pag).fillna(s_venc)
+        # Extração inteligente do mês
+        mes_comp_series = df[c_comp].apply(extrair_mes_competencia) if c_comp else pd.Series(index=df.index, dtype='object')
+        
+        # Se a competência foi identificada, usa ela; senão, usa a data de pagamento ou vencimento
+        mes_final = mes_comp_series.fillna(s_pag.dt.month).fillna(s_venc.dt.month)
+        
+        df['DT_REF'] = s_pag.fillna(s_venc)
         df['VALOR_NUM'] = df[c_val].apply(clean_currency)
         df['ST_UP'] = df[c_st].astype(str).str.strip().str.upper()
         
-        cond = (df['DT_REF'].dt.month == target_month) & (df['DT_REF'].dt.year == 2026) if target_month else (df['DT_REF'].dt.year == 2026)
+        # Filtro de mês
+        if target_month:
+            cond = (mes_final == target_month)
+        else:
+            cond = pd.Series(True, index=df.index)
+            
         df_f = df[cond].copy()
         
-        pago = df_f[df_f['ST_UP'] == 'PAGO']['VALOR_NUM'].sum()
-        vencido = df_f[df_f['ST_UP'] == 'VENCIDO']['VALOR_NUM'].sum()
-        a_vencer = df_f[df_f['ST_UP'] == 'PENDENTE']['VALOR_NUM'].sum()
+        # Filtros de Status tolerantes a sinônimos
+        status_pago = df_f['ST_UP'].isin(['PAGO', 'PAGA', 'LIQUIDADO', 'CONCILIADO'])
+        status_vencido = df_f['ST_UP'].isin(['VENCIDO', 'VENCIDA', 'ATRASADO', 'ATRASADA'])
+        status_pendente = df_f['ST_UP'].isin(['PENDENTE', 'A VENCER', 'ABERTO'])
+        
+        pago = df_f[status_pago]['VALOR_NUM'].sum()
+        vencido = df_f[status_vencido]['VALOR_NUM'].sum()
+        a_vencer = df_f[status_pendente]['VALOR_NUM'].sum()
         
         return pago, vencido, a_vencer, df_f
     return 0.0, 0.0, 0.0, pd.DataFrame()
@@ -521,12 +583,12 @@ with ag2:
 
 def extrair_pendencias(df, tipo):
     if df.empty: return pd.DataFrame()
-    c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data'])
-    c_val = match_col(df, ['Valor', 'Valor (R$)'])
-    c_st = match_col(df, ['Status', 'Situação'])
-    c_forn = match_col(df, ['Fornecedor', 'Razão Social', 'Beneficiário'])
-    c_desc = match_col(df, ['Descrição', 'Descricao', 'Item'])
-    c_cat = match_col(df, ['Categoria'])
+    c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data', 'DATA_VENCIMENTO'])
+    c_val = match_col(df, ['Valor', 'Valor (R$)', 'VALOR'])
+    c_st = match_col(df, ['Status', 'Situação', 'STATUS', 'SITUACAO'])
+    c_forn = match_col(df, ['Fornecedor', 'Razão Social', 'Beneficiário', 'FORNECEDOR'])
+    c_desc = match_col(df, ['Descrição', 'Descricao', 'Item', 'DESCRICAO'])
+    c_cat = match_col(df, ['Categoria', 'CATEGORIA'])
     
     if c_venc and c_val and c_st:
         df_temp = df.copy()
@@ -534,7 +596,10 @@ def extrair_pendencias(df, tipo):
         df_temp['VENC_DT'] = parse_dates_robust(df_temp[c_venc])
         df_temp['STATUS_UP'] = df_temp[c_st].astype(str).str.strip().str.upper()
         
-        pendentes = df_temp[df_temp['STATUS_UP'].isin(['PENDENTE', 'VENCIDO'])].copy()
+        # Filtra pendências reais
+        cond_aberto = df_temp['STATUS_UP'].isin(['PENDENTE', 'VENCIDO', 'A VENCER', 'ATRASADO', 'VENCIDA', 'ABERTO'])
+        pendentes = df_temp[cond_aberto].copy()
+        
         pendentes['Tipo de Despesa'] = tipo
         pendentes['Fornecedor_Display'] = pendentes[c_forn] if c_forn else '-'
         pendentes['Descricao_Display'] = pendentes[c_desc] if c_desc else '-'
@@ -548,7 +613,7 @@ pend_fix = extrair_pendencias(df_fix, "Fixa")
 df_agenda_dinamica = pd.concat([pend_var, pend_fix], ignore_index=True)
 
 if not df_agenda_dinamica.empty:
-    cond_vencido = (df_agenda_dinamica['STATUS_UP'] == 'VENCIDO')
+    cond_vencido = df_agenda_dinamica['STATUS_UP'].isin(['VENCIDO', 'ATRASADO', 'VENCIDA'])
     
     if modo_ag == "Semana Vigente (Seg a Dom)":
         cond_data = (df_agenda_dinamica['VENC_DT'] >= pd.to_datetime(segunda.date())) & (df_agenda_dinamica['VENC_DT'] <= pd.to_datetime(domingo.date()))
