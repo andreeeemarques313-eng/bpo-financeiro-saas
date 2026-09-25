@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import requests
 import urllib.parse
+import re
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURAÇÃO VISUAL ENTERPRISE
+# 1. CONFIGURAÇÃO DA INTERFACE ENTERPRISE (PADRÃO CONTA AZUL / OMIE)
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Portal BPO Financeiro | Grupo Fiño House",
@@ -16,6 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Estilização CSS com proteção contra quebra de linhas numéricas
 st.markdown("""
     <style>
     .main { background-color: #f4f6f9; }
@@ -41,19 +43,33 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# -----------------------------------------------------------------------------
+# 2. BANCO DE DADOS DE UNIDADES
+# -----------------------------------------------------------------------------
 CLIENTES = {
-    "Tere": {"nome": "Fiño House - Teresópolis (RJ)", "id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw"},
-    "OB": {"nome": "Fiño House - Minas Gerais (OB)", "id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw"}
+    "Tere": {
+        "nome": "Fiño House - Teresópolis (RJ)", 
+        "id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw"
+    },
+    "OB": {
+        "nome": "Fiño House - Minas Gerais (OB)", 
+        "id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw"
+    }
 }
 
 # -----------------------------------------------------------------------------
-# 2. TRATAMENTO NUMÉRICO E CONVERSÃO DE DADOS
+# 3. TRATAMENTO NUMÉRICO E CONVERSÃO DE DADOS ROBUSTA
 # -----------------------------------------------------------------------------
 def clean_currency(val):
-    if pd.isna(val): return 0.0
-    s = str(val).replace('R$', '').replace(' ', '').strip()
-    if not s or s in ['-', '#REF!', '#N/A', 'nan', 'None']: return 0.0
-    if '(' in s and ')' in s: s = '-' + s.replace('(', '').replace(')', '')
+    if val is None or pd.isna(val):
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip().replace('R$', '').replace(' ', '')
+    if not s or s in ['-', '#REF!', '#N/A', 'nan', 'None']:
+        return 0.0
+    if '(' in s and ')' in s:
+        s = '-' + s.replace('(', '').replace(')', '')
     if '.' in s and ',' in s:
         if s.rfind(',') > s.rfind('.'):
             s = s.replace('.', '').replace(',', '.')
@@ -70,8 +86,13 @@ def format_brl(val):
     return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def parse_dates_robust(series):
-    if series is None or series.empty: return pd.Series(dtype='datetime64[ns]')
-    return pd.to_datetime(series.astype(str).str.strip(), errors='coerce', dayfirst=True)
+    if series is None or series.empty:
+        return pd.Series(dtype='datetime64[ns]')
+    s = series.astype(str).str.strip().replace({'nan': None, 'None': None, '': None, 'NaT': None})
+    try:
+        return pd.to_datetime(s, format='mixed', dayfirst=True, errors='coerce')
+    except:
+        return pd.to_datetime(s, dayfirst=True, errors='coerce')
 
 def match_col(df, candidates):
     if df.empty: return None
@@ -82,108 +103,146 @@ def match_col(df, candidates):
     return None
 
 # -----------------------------------------------------------------------------
-# 3. VALIDADOR DE ESQUEMA DAS ABAS
+# 4. MOTOR DE DESCOBERTA E EXTRAÇÃO AUTOMÁTICA POR GID
 # -----------------------------------------------------------------------------
 def is_valid_extrato(df):
-    if df.empty: return False
+    if df.empty or len(df.columns) < 2: return False
     cols = [str(c).strip().upper() for c in df.columns]
-    has_date = any('DATA' in c for c in cols)
-    has_val = any('VALOR' in c or 'BANCO' in c for c in cols)
-    return has_date and has_val
+    if 'INDICADOR' in cols: return False
+    return any('DATA' in c for c in cols) and (any('VALOR' in c for c in cols) or any('BANCO' in c for c in cols))
 
 def is_valid_contas(df):
-    if df.empty: return False
+    if df.empty or len(df.columns) < 2: return False
     cols = [str(c).strip().upper() for c in df.columns]
-    has_date = any('VENCIMENTO' in c or 'PAGAMENTO' in c for c in cols)
-    has_val = any('VALOR' in c for c in cols)
-    return has_date and has_val
+    if 'INDICADOR' in cols: return False
+    return any('VENCIMENTO' in c for c in cols) or any('PAGAMENTO' in c for c in cols)
 
-@st.cache_data(ttl=5, show_spinner=False)
-def fetch_tab_verified(sheet_id, tab_candidates, validator_type, api_key=""):
-    validator = is_valid_extrato if validator_type == "extrato" else is_valid_contas
-    
-    # 1. Tentativa via Google Sheets API v4 (se houver API Key)
-    if api_key:
-        for tab in tab_candidates:
-            range_fmt = urllib.parse.quote(f"'{tab}'!A1:Z500")
-            url_api = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{range_fmt}?key={api_key}"
+@st.cache_data(ttl=15, show_spinner=False)
+def discover_google_sheet_tabs(sheet_id):
+    """Lê o cabeçalho HTML da planilha para extrair os GIDs numéricos exatos de cada aba."""
+    tabs_map = {}
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/htmlview"
+    try:
+        r = requests.get(url, timeout=7, headers={'User-Agent': 'Mozilla/5.0'})
+        if r.status_code == 200:
+            matches = re.findall(r'<li[^>]*id="sheet-button-([0-9]+)"[^>]*>.*?<a[^>]*>([^<]+)</a>', r.text, re.DOTALL)
+            for gid, name in matches:
+                tabs_map[name.strip()] = gid
+            if not tabs_map:
+                m2 = re.findall(r'\[\s*([0-9]+)\s*,\s*0\s*,\s*"([^"]+)"', r.text)
+                for gid, name in m2:
+                    tabs_map[name.strip()] = gid
+    except Exception:
+        pass
+    return tabs_map
+
+@st.cache_data(ttl=10, show_spinner=False)
+def download_sheet_by_gid_or_name(sheet_id, target_type, candidate_names, tabs_discovered):
+    validator = is_valid_extrato if target_type == "extrato" else is_valid_contas
+
+    # Camada 1: Busca pelo GID numérico descoberto
+    for tab_title, gid in tabs_discovered.items():
+        clean_title = tab_title.upper()
+        matches = False
+        if target_type == "extrato" and "EXTRATO" in clean_title:
+            matches = True
+        elif target_type == "variaveis" and ("VARIA" in clean_title or "VARIÁ" in clean_title):
+            matches = True
+        elif target_type == "fixas" and "FIXA" in clean_title:
+            matches = True
+
+        if matches:
+            url_gid = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid}"
             try:
-                res = requests.get(url_api, timeout=5)
-                if res.status_code == 200:
-                    rows = res.json().get('values', [])
-                    if len(rows) > 1:
-                        df = pd.DataFrame(rows[1:], columns=rows[0])
-                        df.columns = [str(c).strip() for c in df.columns]
-                        if validator(df):
-                            return df, "Google API v4"
-            except Exception:
+                df = pd.read_csv(url_gid)
+                if validator(df):
+                    df.columns = [str(c).strip() for c in df.columns]
+                    return df, f"GID Nativo ({gid})"
+            except:
                 pass
 
-    # 2. Tentativa via GViz e Export CSV (testando com e sem acento)
-    for tab in tab_candidates:
-        for route in [
-            f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={urllib.parse.quote(tab)}",
-            f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&sheet={urllib.parse.quote(tab)}"
+    # Camada 2: Busca por variações nominais no GViz (com e sem acentos)
+    for name in candidate_names:
+        for url_pattern in [
+            f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={urllib.parse.quote(name)}",
+            f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&sheet={urllib.parse.quote(name)}"
         ]:
             try:
-                df = pd.read_csv(route)
-                if not df.empty and len(df.columns) >= 2:
+                df = pd.read_csv(url_pattern)
+                if validator(df):
                     df.columns = [str(c).strip() for c in df.columns]
-                    if validator(df):
-                        return df, "Google GViz"
-            except Exception:
+                    return df, f"Nome da Aba ('{name}')"
+            except:
                 continue
 
     return pd.DataFrame(), None
 
-def load_data_pipeline(sheet_id, api_key=""):
-    # Ordem de busca: nomes sem acento primeiro para evitar falha no GViz
-    df_ext, m_e = fetch_tab_verified(sheet_id, ["EXTRATO BANCARIO", "EXTRATO", "EXTRATO BANCÁRIO"], "extrato", api_key)
-    df_var, m_v = fetch_tab_verified(sheet_id, ["CONTAS VARIAVEIS", "VARIAVEIS", "CONTAS VARIÁVEIS"], "contas", api_key)
-    df_fix, m_f = fetch_tab_verified(sheet_id, ["CONTAS FIXAS", "FIXAS"], "contas", api_key)
-    
+def load_data_pipeline(sheet_id):
+    tabs_discovered = discover_google_sheet_tabs(sheet_id)
+
+    extrato_candidates = [
+        "EXTRATO BANCARIO", "EXTRATO BANCÁRIO", "EXTRATOS BANCARIOS", "EXTRATOS BANCÁRIOS",
+        "EXTRATO", "EXTRATOS", "Extrato Bancário", "Extrato Bancario"
+    ]
+    var_candidates = [
+        "CONTAS VARIAVEIS", "CONTAS VARIÁVEIS", "VARIAVEIS", "VARIÁVEIS",
+        "Contas Variáveis", "Contas Variaveis", "DESPESAS VARIAVEIS"
+    ]
+    fix_candidates = [
+        "CONTAS FIXAS", "FIXAS", "Contas Fixas", "DESPESAS FIXAS"
+    ]
+
+    df_ext, m_e = download_sheet_by_gid_or_name(sheet_id, "extrato", extrato_candidates, tabs_discovered)
+    df_var, m_v = download_sheet_by_gid_or_name(sheet_id, "variaveis", var_candidates, tabs_discovered)
+    df_fix, m_f = download_sheet_by_gid_or_name(sheet_id, "fixas", fix_candidates, tabs_discovered)
+
     return {
         "extrato": df_ext,
         "variaveis": df_var,
         "fixas": df_fix,
-        "modo": m_e or m_v or m_f,
-        "erro": df_ext.empty and df_var.empty and df_fix.empty
+        "status": {
+            "extrato": (not df_ext.empty, m_e, len(df_ext)),
+            "variaveis": (not df_var.empty, m_v, len(df_var)),
+            "fixas": (not df_fix.empty, m_f, len(df_fix))
+        }
     }
 
 # -----------------------------------------------------------------------------
-# 4. SIDEBAR E FILTROS DE COMPETÊNCIA
+# 5. CONTROLES LATERAIS E FILTROS DE COMPETÊNCIA
 # -----------------------------------------------------------------------------
 st.sidebar.title("🏢 Painel BPO Financeiro")
 st.sidebar.caption("Alex — Diretor de Tecnologia (CTO)")
 st.sidebar.markdown("---")
 
-api_key_manual = st.sidebar.text_input("🔑 Chave API Google (Opcional):", type="password", help="Chave da API oficial do Google Cloud se configurada.")
-key_to_use = api_key_manual or st.secrets.get("GOOGLE_API_KEY", "")
-
 unidade_chave = st.sidebar.selectbox("Unidade:", list(CLIENTES.keys()), format_func=lambda x: CLIENTES[x]["nome"])
 periodo_filtro = st.sidebar.selectbox("Competência:", ["Agosto/2026", "Setembro/2026", "CONSOLIDADO DO ANO (2026)"])
 
-if st.sidebar.button("🔄 Sincronizar em Tempo Real"):
+if st.sidebar.button("🔄 Sincronizar Base de Dados"):
     st.cache_data.clear()
     st.rerun()
 
-dados = load_data_pipeline(CLIENTES[unidade_chave]["id"], key_to_use)
+dados = load_data_pipeline(CLIENTES[unidade_chave]["id"])
 
-if dados["erro"]:
-    st.error("🚨 **Não foi possível aceder à planilha.**")
-    st.warning("Verifique se o link está como 'Qualquer pessoa com o link pode ver' no Google Sheets.")
-    st.stop()
+# Monitor de infraestrutura em tempo real na barra lateral
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📡 Conexão com Google Sheets")
+st_ext_ok, st_ext_mod, st_ext_rows = dados["status"]["extrato"]
+st_var_ok, st_var_mod, st_var_rows = dados["status"]["variaveis"]
+st_fix_ok, st_fix_mod, st_fix_rows = dados["status"]["fixas"]
 
-st.sidebar.success(f"Ligação Ativa: **{dados['modo']}**")
+st.sidebar.markdown(f"{'🟢' if st_ext_ok else '🔴'} **Extrato:** {st_ext_rows} reg ({st_ext_mod or 'Não localizado'})")
+st.sidebar.markdown(f"{'🟢' if st_var_ok else '🔴'} **Variáveis:** {st_var_rows} reg ({st_var_mod or 'Não localizado'})")
+st.sidebar.markdown(f"{'🟢' if st_fix_ok else '🔴'} **Fixas:** {st_fix_rows} reg ({st_fix_mod or 'Não localizado'})")
 
 target_month = 8 if "Agosto" in periodo_filtro else (9 if "Setembro" in periodo_filtro else None)
 
-# -----------------------------------------------------------------------------
-# 5. REGRA 1 & 2: EXTRATO (ENTRADAS) E CONTAS (SAÍDAS DO MÊS)
-# -----------------------------------------------------------------------------
 df_ext = dados["extrato"]
 df_var = dados["variaveis"]
 df_fix = dados["fixas"]
+
+# -----------------------------------------------------------------------------
+# 6. REGRAS 1 & 2: EXTRATO (ENTRADAS) E CONTAS (SAÍDAS DO MÊS)
+# -----------------------------------------------------------------------------
 
 # REGRA 1: ENTRADAS EXCLUSIVAS DA ABA EXTRATO BANCÁRIO
 receita_extrato, saidas_extrato = 0.0, 0.0
@@ -203,7 +262,7 @@ if not df_ext.empty:
             saidas_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] < 0]['VALOR_NUM'].sum()
 
 # REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DO MÊS VIGENTE
-def process_contas_mes(df):
+def process_contas_competencia(df):
     if df.empty: return 0.0, 0.0, pd.DataFrame()
     c_pag = match_col(df, ['Data de Pagamento', 'Pagamento'])
     c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data'])
@@ -225,14 +284,14 @@ def process_contas_mes(df):
         return pago, pend, df_f
     return 0.0, 0.0, pd.DataFrame()
 
-var_pago, var_pend, df_var_f = process_contas_mes(df_var)
-fix_pago, fix_pend, df_fix_f = process_contas_mes(df_fix)
+var_pago, var_pend, df_var_f = process_contas_competencia(df_var)
+fix_pago, fix_pend, df_fix_f = process_contas_competencia(df_fix)
 
 saldo_caixa_real = receita_extrato + saidas_extrato
 total_pendente_mes = var_pend + fix_pend
 
 # -----------------------------------------------------------------------------
-# 6. DASHBOARD EXECUTIVO: KPI CARDS
+# 7. DASHBOARD EXECUTIVO: KPI CARDS
 # -----------------------------------------------------------------------------
 st.title(f"📊 Painel Executivo BPO Financeiro — {CLIENTES[unidade_chave]['nome']}")
 st.caption(f"Competência: **{periodo_filtro}** | Monitorização Automatizada em Tempo Real")
@@ -247,7 +306,7 @@ with c5: st.markdown(f'<div class="kpi-card" style="border-left-color: #6554C0;"
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. REGRA 3: AGENDA FINANCEIRA DINÂMICA (SEGUNDA A DOMINGO DA SEMANA)
+# 8. REGRA 3: AGENDA FINANCEIRA DINÂMICA (SEMANA VIGENTE SEGUNDA A DOMINGO)
 # -----------------------------------------------------------------------------
 st.subheader("📅 Agenda Financeira Vigente — Previsão Semanal (Segunda a Domingo)")
 
@@ -262,7 +321,7 @@ with ag2:
     if modo_ag == "Intervalo Personalizado":
         datas_sel = st.date_input("Intervalo de Vencimento:", value=(segunda.date(), domingo.date()))
     else:
-        st.info(f"📆 **Semana Vigente:** Segunda-feira ({segunda.strftime('%d/%m/%Y')}) até Domingo ({domingo.strftime('%d/%m/%Y')})")
+        st.info(f"📆 **Semana Atual:** Segunda-feira ({segunda.strftime('%d/%m/%Y')}) até Domingo ({domingo.strftime('%d/%m/%Y')})")
 
 # Consolidação dinâmica a partir de CONTAS VARIÁVEIS e CONTAS FIXAS
 def extrair_pendencias(df, tipo):
@@ -280,9 +339,9 @@ def extrair_pendencias(df, tipo):
         df_temp['VENC_DT'] = parse_dates_robust(df_temp[c_venc])
         df_temp['STATUS_UP'] = df_temp[c_st].astype(str).str.strip().str.upper()
         
-        # Filtra apenas o que precisa ser pago (PENDENTE ou VENCIDO)
+        # Filtra estritamente o que está em aberto (PENDENTE ou VENCIDO)
         pendentes = df_temp[df_temp['STATUS_UP'].isin(['PENDENTE', 'VENCIDO'])].copy()
-        pendentes['Tipo de Conta'] = tipo
+        pendentes['Tipo de Despesa'] = tipo
         pendentes['Fornecedor_Display'] = pendentes[c_forn] if c_forn else '-'
         pendentes['Descricao_Display'] = pendentes[c_desc] if c_desc else '-'
         pendentes['Categoria_Display'] = pendentes[c_cat] if c_cat else '-'
@@ -311,10 +370,10 @@ if not df_agenda_dinamica.empty:
         df_agenda_view['Valor Formatado'] = df_agenda_view['VALOR_NUM'].apply(format_brl)
         df_agenda_view['Data Vencimento'] = df_agenda_view['VENC_DT'].dt.strftime('%d/%m/%Y')
         
-        cols_grid = ['Data Vencimento', 'Tipo de Conta', 'Fornecedor_Display', 'Descricao_Display', 'Categoria_Display', 'Valor Formatado', 'STATUS_UP']
+        cols_grid = ['Data Vencimento', 'Tipo de Despesa', 'Fornecedor_Display', 'Descricao_Display', 'Categoria_Display', 'Valor Formatado', 'STATUS_UP']
         col_rename = {
             'Data Vencimento': 'Vencimento',
-            'Tipo de Conta': 'Tipo',
+            'Tipo de Despesa': 'Tipo',
             'Fornecedor_Display': 'Fornecedor',
             'Descricao_Display': 'Descrição',
             'Categoria_Display': 'Categoria',
@@ -336,7 +395,7 @@ else:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 8. GRÁFICOS GERENCIAIS E DEMONSTRATIVO DE FLUXO
+# 9. DEMONSTRATIVO VISUAL GERENCIAL DE FLUXO DE CAIXA
 # -----------------------------------------------------------------------------
 st.subheader("📈 Demonstrativo Gerencial do Período")
 g1, g2 = st.columns([6, 4])
