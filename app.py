@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURAÇÃO DA INTERFACE ENTERPRISE (PADRÃO CONTA AZUL / OMIE)
+# 1. CONFIGURAÇÃO VISUAL ENTERPRISE (SEM RETICÊNCIAS)
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Portal BPO Financeiro | Grupo Fiño House",
@@ -17,35 +17,42 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilização CSS com proteção contra quebra de linhas numéricas
 st.markdown("""
     <style>
     .main { background-color: #f4f6f9; }
     .kpi-card {
         background-color: #ffffff;
-        padding: 20px;
+        padding: 18px 16px;
         border-radius: 8px;
         box-shadow: 0 2px 6px rgba(0,0,0,0.05);
         border-left: 5px solid #0052CC;
         margin-bottom: 12px;
+        min-height: 110px;
     }
-    .kpi-title { font-size: 11px; color: #5E6C84; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+    .kpi-title { 
+        font-size: 11px; 
+        color: #5E6C84; 
+        font-weight: 700; 
+        text-transform: uppercase; 
+        letter-spacing: 0.5px;
+        margin-bottom: 4px;
+    }
     .kpi-value { 
-        font-size: 22px; 
+        font-size: clamp(16px, 1.25vw, 21px) !important; 
         color: #172B4D; 
         font-weight: 800; 
-        margin-top: 4px; 
         white-space: nowrap !important;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        overflow: visible !important;
     }
-    .kpi-sub { font-size: 12px; color: #7A869A; margin-top: 2px; }
+    .kpi-sub { 
+        font-size: 11px; 
+        color: #7A869A; 
+        margin-top: 4px;
+        white-space: nowrap;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# 2. BANCO DE DADOS DE UNIDADES
-# -----------------------------------------------------------------------------
 CLIENTES = {
     "Tere": {
         "nome": "Fiño House - Teresópolis (RJ)", 
@@ -58,7 +65,7 @@ CLIENTES = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. TRATAMENTO NUMÉRICO E CONVERSÃO DE DADOS ROBUSTA
+# 2. CONVERSÃO MONETÁRIA E PARSER DE DATAS
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if val is None or pd.isna(val):
@@ -103,7 +110,7 @@ def match_col(df, candidates):
     return None
 
 # -----------------------------------------------------------------------------
-# 4. MOTOR DE DESCOBERTA E EXTRAÇÃO AUTOMÁTICA POR GID
+# 3. VALIDAÇÃO DE ESQUEMA DAS TABELAS
 # -----------------------------------------------------------------------------
 def is_valid_extrato(df):
     if df.empty or len(df.columns) < 2: return False
@@ -111,57 +118,72 @@ def is_valid_extrato(df):
     if 'INDICADOR' in cols: return False
     return any('DATA' in c for c in cols) and (any('VALOR' in c for c in cols) or any('BANCO' in c for c in cols))
 
-def is_valid_contas(df):
-    if df.empty or len(df.columns) < 2: return False
+def is_valid_contas_var(df):
+    if df.empty or len(df.columns) < 3: return False
     cols = [str(c).strip().upper() for c in df.columns]
     if 'INDICADOR' in cols: return False
-    return any('VENCIMENTO' in c for c in cols) or any('PAGAMENTO' in c for c in cols)
+    has_venc = any('VENCIMENTO' in c for c in cols) or any('PAGAMENTO' in c for c in cols)
+    has_val = any('VALOR' in c for c in cols)
+    # Diferencia de Contas Fixas pela quantidade de registros ou coluna de Fornecedor/Tipo
+    return has_venc and has_val
 
-@st.cache_data(ttl=15, show_spinner=False)
-def discover_google_sheet_tabs(sheet_id):
-    """Lê o cabeçalho HTML da planilha para extrair os GIDs numéricos exatos de cada aba."""
-    tabs_map = {}
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/htmlview"
-    try:
-        r = requests.get(url, timeout=7, headers={'User-Agent': 'Mozilla/5.0'})
-        if r.status_code == 200:
-            matches = re.findall(r'<li[^>]*id="sheet-button-([0-9]+)"[^>]*>.*?<a[^>]*>([^<]+)</a>', r.text, re.DOTALL)
-            for gid, name in matches:
-                tabs_map[name.strip()] = gid
-            if not tabs_map:
-                m2 = re.findall(r'\[\s*([0-9]+)\s*,\s*0\s*,\s*"([^"]+)"', r.text)
-                for gid, name in m2:
-                    tabs_map[name.strip()] = gid
-    except Exception:
-        pass
-    return tabs_map
+def is_valid_contas_fix(df):
+    if df.empty or len(df.columns) < 3: return False
+    cols = [str(c).strip().upper() for c in df.columns]
+    if 'INDICADOR' in cols: return False
+    has_venc = any('VENCIMENTO' in c for c in cols) or any('PAGAMENTO' in c for c in cols)
+    has_val = any('VALOR' in c for c in cols)
+    return has_venc and has_val
+
+# -----------------------------------------------------------------------------
+# 4. MOTOR DE DESCOBERTA E DOWNLOAD POR GID E MULTIPLOS ENDPOINTS
+# -----------------------------------------------------------------------------
+@st.cache_data(ttl=10, show_spinner=False)
+def discover_sheet_gids(sheet_id):
+    gids = {}
+    for u in [
+        f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit",
+        f"https://docs.google.com/spreadsheets/d/{sheet_id}/htmlview",
+        f"https://docs.google.com/spreadsheets/d/{sheet_id}/preview"
+    ]:
+        try:
+            r = requests.get(u, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+            if r.status_code == 200:
+                for gid, title in re.findall(r'["\']?sheetId["\']?\s*:\s*([0-9]+)[^}]+?["\']?title["\']?\s*:\s*["\']([^"\']+)["\']', r.text):
+                    gids[title.strip()] = gid
+                for title, gid in re.findall(r'["\']?title["\']?\s*:\s*["\']([^"\']+)["\'][^}]+?["\']?sheetId["\']?\s*:\s*([0-9]+)', r.text):
+                    gids[title.strip()] = gid
+                for gid, title in re.findall(r'id=["\']sheet-button-([0-9]+)["\'][^>]*>.*?<a[^>]*>([^<]+)</a>', r.text, re.DOTALL):
+                    gids[title.strip()] = gid
+                if len(gids) >= 3:
+                    break
+        except Exception:
+            continue
+    return gids
 
 @st.cache_data(ttl=10, show_spinner=False)
-def download_sheet_by_gid_or_name(sheet_id, target_type, candidate_names, tabs_discovered):
-    validator = is_valid_extrato if target_type == "extrato" else is_valid_contas
+def download_tab_guaranteed(sheet_id, target_kind, candidate_names, discovered_gids):
+    validator = is_valid_extrato if target_kind == "extrato" else (is_valid_contas_var if target_kind == "variaveis" else is_valid_contas_fix)
 
-    # Camada 1: Busca pelo GID numérico descoberto
-    for tab_title, gid in tabs_discovered.items():
-        clean_title = tab_title.upper()
-        matches = False
-        if target_type == "extrato" and "EXTRATO" in clean_title:
-            matches = True
-        elif target_type == "variaveis" and ("VARIA" in clean_title or "VARIÁ" in clean_title):
-            matches = True
-        elif target_type == "fixas" and "FIXA" in clean_title:
-            matches = True
+    # 1. Tenta baixar pelos GIDs mapeados do HTML
+    for title, gid in discovered_gids.items():
+        t_up = title.upper()
+        match = False
+        if target_kind == "extrato" and "EXTRATO" in t_up: match = True
+        elif target_kind == "variaveis" and ("VARIA" in t_up or "VARIÁ" in t_up): match = True
+        elif target_kind == "fixas" and "FIXA" in t_up: match = True
 
-        if matches:
+        if match:
             url_gid = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid}"
             try:
                 df = pd.read_csv(url_gid)
                 if validator(df):
                     df.columns = [str(c).strip() for c in df.columns]
-                    return df, f"GID Nativo ({gid})"
-            except:
+                    return df, f"GID ({gid})"
+            except Exception:
                 pass
 
-    # Camada 2: Busca por variações nominais no GViz (com e sem acentos)
+    # 2. Tenta por nome com GViz e Export padrão
     for name in candidate_names:
         for url_pattern in [
             f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={urllib.parse.quote(name)}",
@@ -171,30 +193,33 @@ def download_sheet_by_gid_or_name(sheet_id, target_type, candidate_names, tabs_d
                 df = pd.read_csv(url_pattern)
                 if validator(df):
                     df.columns = [str(c).strip() for c in df.columns]
-                    return df, f"Nome da Aba ('{name}')"
-            except:
+                    return df, f"Aba ('{name}')"
+            except Exception:
                 continue
+
+    # 3. Varredura direta de GIDs comuns (0 até 10 e IDs de 8 dígitos se descobertos)
+    for test_gid in list(range(0, 8)) + list(discovered_gids.values()):
+        url_scan = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={test_gid}"
+        try:
+            df = pd.read_csv(url_scan)
+            if validator(df):
+                df.columns = [str(c).strip() for c in df.columns]
+                return df, f"Varredura GID ({test_gid})"
+        except Exception:
+            continue
 
     return pd.DataFrame(), None
 
 def load_data_pipeline(sheet_id):
-    tabs_discovered = discover_google_sheet_tabs(sheet_id)
+    gids = discover_sheet_gids(sheet_id)
 
-    extrato_candidates = [
-        "EXTRATO BANCARIO", "EXTRATO BANCÁRIO", "EXTRATOS BANCARIOS", "EXTRATOS BANCÁRIOS",
-        "EXTRATO", "EXTRATOS", "Extrato Bancário", "Extrato Bancario"
-    ]
-    var_candidates = [
-        "CONTAS VARIAVEIS", "CONTAS VARIÁVEIS", "VARIAVEIS", "VARIÁVEIS",
-        "Contas Variáveis", "Contas Variaveis", "DESPESAS VARIAVEIS"
-    ]
-    fix_candidates = [
-        "CONTAS FIXAS", "FIXAS", "Contas Fixas", "DESPESAS FIXAS"
-    ]
+    ext_names = ["EXTRATO BANCARIO", "EXTRATO", "EXTRATO BANCÁRIO", "Extrato Bancario"]
+    var_names = ["CONTAS VARIAVEIS", "CONTAS VARIÁVEIS", "VARIAVEIS", "VARIÁVEIS", "Contas Variáveis", "Contas Variaveis", "Despesas Variáveis"]
+    fix_names = ["CONTAS FIXAS", "FIXAS", "Contas Fixas", "Despesas Fixas"]
 
-    df_ext, m_e = download_sheet_by_gid_or_name(sheet_id, "extrato", extrato_candidates, tabs_discovered)
-    df_var, m_v = download_sheet_by_gid_or_name(sheet_id, "variaveis", var_candidates, tabs_discovered)
-    df_fix, m_f = download_sheet_by_gid_or_name(sheet_id, "fixas", fix_candidates, tabs_discovered)
+    df_ext, m_e = download_tab_guaranteed(sheet_id, "extrato", ext_names, gids)
+    df_var, m_v = download_tab_guaranteed(sheet_id, "variaveis", var_names, gids)
+    df_fix, m_f = download_tab_guaranteed(sheet_id, "fixas", fix_names, gids)
 
     return {
         "extrato": df_ext,
@@ -208,7 +233,7 @@ def load_data_pipeline(sheet_id):
     }
 
 # -----------------------------------------------------------------------------
-# 5. CONTROLES LATERAIS E FILTROS DE COMPETÊNCIA
+# 5. CONTROLES LATERAIS E MONITORAMENTO
 # -----------------------------------------------------------------------------
 st.sidebar.title("🏢 Painel BPO Financeiro")
 st.sidebar.caption("Alex — Diretor de Tecnologia (CTO)")
@@ -223,9 +248,8 @@ if st.sidebar.button("🔄 Sincronizar Base de Dados"):
 
 dados = load_data_pipeline(CLIENTES[unidade_chave]["id"])
 
-# Monitor de infraestrutura em tempo real na barra lateral
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 📡 Conexão com Google Sheets")
+st.sidebar.markdown("### 📡 Conexão de Dados")
 st_ext_ok, st_ext_mod, st_ext_rows = dados["status"]["extrato"]
 st_var_ok, st_var_mod, st_var_rows = dados["status"]["variaveis"]
 st_fix_ok, st_fix_mod, st_fix_rows = dados["status"]["fixas"]
@@ -241,7 +265,7 @@ df_var = dados["variaveis"]
 df_fix = dados["fixas"]
 
 # -----------------------------------------------------------------------------
-# 6. REGRAS 1 & 2: EXTRATO (ENTRADAS) E CONTAS (SAÍDAS DO MÊS)
+# 6. REGRAS 1 & 2: EXTRATO (ENTRADAS) E CONTAS (SAÍDAS DA COMPETÊNCIA)
 # -----------------------------------------------------------------------------
 
 # REGRA 1: ENTRADAS EXCLUSIVAS DA ABA EXTRATO BANCÁRIO
@@ -261,18 +285,22 @@ if not df_ext.empty:
             receita_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] > 0]['VALOR_NUM'].sum()
             saidas_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] < 0]['VALOR_NUM'].sum()
 
-# REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DO MÊS VIGENTE
+# REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DA COMPETÊNCIA
 def process_contas_competencia(df):
     if df.empty: return 0.0, 0.0, pd.DataFrame()
+    c_comp = match_col(df, ['Competência', 'Competencia'])
     c_pag = match_col(df, ['Data de Pagamento', 'Pagamento'])
     c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data'])
     c_val = match_col(df, ['Valor', 'Valor (R$)'])
     c_st = match_col(df, ['Status', 'Situação'])
     
     if c_val and c_st:
+        s_comp = parse_dates_robust(df[c_comp]) if c_comp else pd.Series(index=df.index, dtype='datetime64[ns]')
         s_pag = parse_dates_robust(df[c_pag]) if c_pag else pd.Series(index=df.index, dtype='datetime64[ns]')
         s_venc = parse_dates_robust(df[c_venc]) if c_venc else pd.Series(index=df.index, dtype='datetime64[ns]')
-        df['DT_REF'] = s_pag.fillna(s_venc)
+        
+        # Prioriza a coluna Competência; se vazia, utiliza Pagamento ou Vencimento
+        df['DT_REF'] = s_comp.fillna(s_pag).fillna(s_venc)
         df['VALOR_NUM'] = df[c_val].apply(clean_currency)
         df['ST_UP'] = df[c_st].astype(str).str.strip().str.upper()
         
@@ -288,6 +316,8 @@ var_pago, var_pend, df_var_f = process_contas_competencia(df_var)
 fix_pago, fix_pend, df_fix_f = process_contas_competencia(df_fix)
 
 saldo_caixa_real = receita_extrato + saidas_extrato
+
+# Total de pendências da competência ativa
 total_pendente_mes = var_pend + fix_pend
 
 # -----------------------------------------------------------------------------
@@ -297,11 +327,17 @@ st.title(f"📊 Painel Executivo BPO Financeiro — {CLIENTES[unidade_chave]['no
 st.caption(f"Competência: **{periodo_filtro}** | Monitorização Automatizada em Tempo Real")
 
 c1, c2, c3, c4, c5 = st.columns(5)
-with c1: st.markdown(f'<div class="kpi-card"><div class="kpi-title">Entradas (Extrato)</div><div class="kpi-value">{format_brl(receita_extrato)}</div><div class="kpi-sub">Total Recebido</div></div>', unsafe_allow_html=True)
-with c2: st.markdown(f'<div class="kpi-card" style="border-left-color: #FF5630;"><div class="kpi-title">Variáveis Pagas</div><div class="kpi-value">{format_brl(var_pago)}</div><div class="kpi-sub">Insumos & Fornecedores</div></div>', unsafe_allow_html=True)
-with c3: st.markdown(f'<div class="kpi-card" style="border-left-color: #FFAB00;"><div class="kpi-title">Fixas Pagas</div><div class="kpi-value">{format_brl(fix_pago)}</div><div class="kpi-sub">Estrutura Operacional</div></div>', unsafe_allow_html=True)
-with c4: st.markdown(f'<div class="kpi-card" style="border-left-color: {"#36B37E" if saldo_caixa_real >= 0 else "#FF5630"};"><div class="kpi-title">Resultado de Caixa</div><div class="kpi-value">{format_brl(saldo_caixa_real)}</div><div class="kpi-sub">Entradas − Saídas Extrato</div></div>', unsafe_allow_html=True)
-with c5: st.markdown(f'<div class="kpi-card" style="border-left-color: #6554C0;"><div class="kpi-title">Contas Pendentes</div><div class="kpi-value">{format_brl(total_pendente_mes)}</div><div class="kpi-sub">A Vencer / Vencidas</div></div>', unsafe_allow_html=True)
+with c1: 
+    st.markdown(f'<div class="kpi-card"><div class="kpi-title">Entradas (Extrato)</div><div class="kpi-value">{format_brl(receita_extrato)}</div><div class="kpi-sub">Total Recebido</div></div>', unsafe_allow_html=True)
+with c2: 
+    st.markdown(f'<div class="kpi-card" style="border-left-color: #FF5630;"><div class="kpi-title">Variáveis Pagas</div><div class="kpi-value">{format_brl(var_pago)}</div><div class="kpi-sub">Insumos & Fornecedores</div></div>', unsafe_allow_html=True)
+with c3: 
+    st.markdown(f'<div class="kpi-card" style="border-left-color: #FFAB00;"><div class="kpi-title">Fixas Pagas</div><div class="kpi-value">{format_brl(fix_pago)}</div><div class="kpi-sub">Estrutura Operacional</div></div>', unsafe_allow_html=True)
+with c4: 
+    cor_caixa = "#36B37E" if saldo_caixa_real >= 0 else "#FF5630"
+    st.markdown(f'<div class="kpi-card" style="border-left-color: {cor_caixa};"><div class="kpi-title">Resultado de Caixa</div><div class="kpi-value">{format_brl(saldo_caixa_real)}</div><div class="kpi-sub">Entradas − Saídas Extrato</div></div>', unsafe_allow_html=True)
+with c5: 
+    st.markdown(f'<div class="kpi-card" style="border-left-color: #6554C0;"><div class="kpi-title">Contas Pendentes</div><div class="kpi-value">{format_brl(total_pendente_mes)}</div><div class="kpi-sub">A Vencer / Vencidas</div></div>', unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -321,9 +357,8 @@ with ag2:
     if modo_ag == "Intervalo Personalizado":
         datas_sel = st.date_input("Intervalo de Vencimento:", value=(segunda.date(), domingo.date()))
     else:
-        st.info(f"📆 **Semana Atual:** Segunda-feira ({segunda.strftime('%d/%m/%Y')}) até Domingo ({domingo.strftime('%d/%m/%Y')})")
+        st.info(f"📆 **Semana Vigente:** Segunda-feira ({segunda.strftime('%d/%m/%Y')}) até Domingo ({domingo.strftime('%d/%m/%Y')})")
 
-# Consolidação dinâmica a partir de CONTAS VARIÁVEIS e CONTAS FIXAS
 def extrair_pendencias(df, tipo):
     if df.empty: return pd.DataFrame()
     c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data'])
@@ -339,7 +374,6 @@ def extrair_pendencias(df, tipo):
         df_temp['VENC_DT'] = parse_dates_robust(df_temp[c_venc])
         df_temp['STATUS_UP'] = df_temp[c_st].astype(str).str.strip().str.upper()
         
-        # Filtra estritamente o que está em aberto (PENDENTE ou VENCIDO)
         pendentes = df_temp[df_temp['STATUS_UP'].isin(['PENDENTE', 'VENCIDO'])].copy()
         pendentes['Tipo de Despesa'] = tipo
         pendentes['Fornecedor_Display'] = pendentes[c_forn] if c_forn else '-'
@@ -404,7 +438,7 @@ with g1:
     fig_bar = go.Figure(go.Bar(
         x=['Entradas Extrato', 'Saídas Extrato', 'Variáveis Pagas', 'Fixas Pagas', 'Resultado de Caixa'],
         y=[receita_extrato, abs(saidas_extrato), var_pago, fix_pago, saldo_caixa_real],
-        marker_color=['#0052CC', '#172B4D', '#FF5630', '#FFAB00', '#36B37E' if saldo_caixa_real >= 0 else '#FF5630'],
+        marker_color=['#0052CC', '#172B4D', '#FF5630', '#FFAB00', cor_caixa],
         text=[format_brl(v) for v in [receita_extrato, abs(saidas_extrato), var_pago, fix_pago, saldo_caixa_real]],
         textposition='auto'
     ))
@@ -424,7 +458,7 @@ with g2:
         st.plotly_chart(fig_pie, use_container_width=True)
 
 st.markdown("---")
-st.subheader("📋 Tabela Operacional de Lançamentos (Variáveis do Período)")
+st.subheader("📋 Tabela Operacional de Lançamentos (Variáveis da Competência)")
 if not df_var_f.empty:
     df_var_view = df_var_f.copy()
     c_v_show = match_col(df_var_view, ['Valor', 'Valor (R$)'])
