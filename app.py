@@ -17,12 +17,13 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Estilização CSS responsiva sem corte por reticências
 st.markdown("""
     <style>
     .main { background-color: #f4f6f9; }
     .kpi-card {
         background-color: #ffffff;
-        padding: 18px 16px;
+        padding: 16px 14px;
         border-radius: 8px;
         box-shadow: 0 2px 6px rgba(0,0,0,0.05);
         border-left: 5px solid #0052CC;
@@ -35,14 +36,15 @@ st.markdown("""
         font-weight: 700; 
         text-transform: uppercase; 
         letter-spacing: 0.5px;
-        margin-bottom: 4px;
+        margin-bottom: 6px;
     }
     .kpi-value { 
-        font-size: clamp(16px, 1.25vw, 21px) !important; 
+        font-size: clamp(15px, 1.2vw, 21px) !important; 
         color: #172B4D; 
         font-weight: 800; 
         white-space: nowrap !important;
         overflow: visible !important;
+        text-overflow: clip !important;
     }
     .kpi-sub { 
         font-size: 11px; 
@@ -65,7 +67,7 @@ CLIENTES = {
 }
 
 # -----------------------------------------------------------------------------
-# 2. CONVERSÃO MONETÁRIA E PARSER DE DATAS
+# 2. CONVERSÃO MONETÁRIA E PARSERS DE DADOS
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if val is None or pd.isna(val):
@@ -110,7 +112,7 @@ def match_col(df, candidates):
     return None
 
 # -----------------------------------------------------------------------------
-# 3. VALIDAÇÃO DE ESQUEMA DAS TABELAS
+# 3. VALIDAÇÃO ESTRUTURAL DE ESQUEMA DAS TABELAS
 # -----------------------------------------------------------------------------
 def is_valid_extrato(df):
     if df.empty or len(df.columns) < 2: return False
@@ -124,7 +126,6 @@ def is_valid_contas_var(df):
     if 'INDICADOR' in cols: return False
     has_venc = any('VENCIMENTO' in c for c in cols) or any('PAGAMENTO' in c for c in cols)
     has_val = any('VALOR' in c for c in cols)
-    # Diferencia de Contas Fixas pela quantidade de registros ou coluna de Fornecedor/Tipo
     return has_venc and has_val
 
 def is_valid_contas_fix(df):
@@ -136,25 +137,29 @@ def is_valid_contas_fix(df):
     return has_venc and has_val
 
 # -----------------------------------------------------------------------------
-# 4. MOTOR DE DESCOBERTA E DOWNLOAD POR GID E MULTIPLOS ENDPOINTS
+# 4. MOTOR AVANÇADO DE EXTRAÇÃO POR GID E MULTI-VARREDURA
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=10, show_spinner=False)
-def discover_sheet_gids(sheet_id):
+def discover_all_gids(sheet_id):
+    """Extrai os GIDs de todas as abas tratando tags internas <span> e estruturas JSON."""
     gids = {}
     for u in [
-        f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit",
         f"https://docs.google.com/spreadsheets/d/{sheet_id}/htmlview",
-        f"https://docs.google.com/spreadsheets/d/{sheet_id}/preview"
+        f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
     ]:
         try:
-            r = requests.get(u, timeout=5, headers={'User-Agent': 'Mozilla/5.0'})
+            r = requests.get(u, timeout=6, headers={'User-Agent': 'Mozilla/5.0'})
             if r.status_code == 200:
-                for gid, title in re.findall(r'["\']?sheetId["\']?\s*:\s*([0-9]+)[^}]+?["\']?title["\']?\s*:\s*["\']([^"\']+)["\']', r.text):
-                    gids[title.strip()] = gid
-                for title, gid in re.findall(r'["\']?title["\']?\s*:\s*["\']([^"\']+)["\'][^}]+?["\']?sheetId["\']?\s*:\s*([0-9]+)', r.text):
-                    gids[title.strip()] = gid
-                for gid, title in re.findall(r'id=["\']sheet-button-([0-9]+)["\'][^>]*>.*?<a[^>]*>([^<]+)</a>', r.text, re.DOTALL):
-                    gids[title.strip()] = gid
+                # 1. Busca por tags de botão de aba com limpeza interna de HTML
+                for gid, content in re.findall(r'id=["\']sheet-button-([0-9]+)["\'][^>]*>(.*?)</li>', r.text, re.DOTALL):
+                    title_clean = re.sub(r'<[^>]+>', '', content).strip()
+                    if title_clean:
+                        gids[title_clean.upper()] = gid
+                # 2. Busca por JSON incorporado
+                for m in re.finditer(r'["\']?sheetId["\']?\s*:\s*([0-9]+)[^}]+?["\']?title["\']?\s*:\s*["\']([^"\']+)["\']', r.text):
+                    gids[m.group(2).strip().upper()] = m.group(1).strip()
+                for m in re.finditer(r'["\']?title["\']?\s*:\s*["\']([^"\']+)["\'][^}]+?["\']?sheetId["\']?\s*:\s*([0-9]+)', r.text):
+                    gids[m.group(1).strip().upper()] = m.group(2).strip()
                 if len(gids) >= 3:
                     break
         except Exception:
@@ -162,16 +167,26 @@ def discover_sheet_gids(sheet_id):
     return gids
 
 @st.cache_data(ttl=10, show_spinner=False)
-def download_tab_guaranteed(sheet_id, target_kind, candidate_names, discovered_gids):
+def download_tab_guaranteed(sheet_id, target_kind, candidate_names, discovered_gids, manual_gid=""):
     validator = is_valid_extrato if target_kind == "extrato" else (is_valid_contas_var if target_kind == "variaveis" else is_valid_contas_fix)
 
-    # 1. Tenta baixar pelos GIDs mapeados do HTML
-    for title, gid in discovered_gids.items():
-        t_up = title.upper()
+    # Prioridade 0: GID Manual fornecido na barra lateral
+    if manual_gid and manual_gid.strip().isdigit():
+        url_manual = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={manual_gid.strip()}"
+        try:
+            df = pd.read_csv(url_manual)
+            if validator(df):
+                df.columns = [str(c).strip() for c in df.columns]
+                return df, f"GID Manual ({manual_gid.strip()})"
+        except Exception:
+            pass
+
+    # Prioridade 1: GIDs mapeados na inspeção HTML/JSON
+    for title_upper, gid in discovered_gids.items():
         match = False
-        if target_kind == "extrato" and "EXTRATO" in t_up: match = True
-        elif target_kind == "variaveis" and ("VARIA" in t_up or "VARIÁ" in t_up): match = True
-        elif target_kind == "fixas" and "FIXA" in t_up: match = True
+        if target_kind == "extrato" and "EXTRATO" in title_upper: match = True
+        elif target_kind == "variaveis" and ("VARIA" in title_upper or "VARIÁ" in title_upper): match = True
+        elif target_kind == "fixas" and "FIXA" in title_upper: match = True
 
         if match:
             url_gid = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid}"
@@ -179,26 +194,27 @@ def download_tab_guaranteed(sheet_id, target_kind, candidate_names, discovered_g
                 df = pd.read_csv(url_gid)
                 if validator(df):
                     df.columns = [str(c).strip() for c in df.columns]
-                    return df, f"GID ({gid})"
+                    return df, f"GID Automático ({gid})"
             except Exception:
                 pass
 
-    # 2. Tenta por nome com GViz e Export padrão
+    # Prioridade 2: Variações textuais completas (com e sem espaços finais)
     for name in candidate_names:
-        for url_pattern in [
-            f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={urllib.parse.quote(name)}",
-            f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&sheet={urllib.parse.quote(name)}"
-        ]:
-            try:
-                df = pd.read_csv(url_pattern)
-                if validator(df):
-                    df.columns = [str(c).strip() for c in df.columns]
-                    return df, f"Aba ('{name}')"
-            except Exception:
-                continue
+        for enc in [urllib.parse.quote(name), urllib.parse.quote_plus(name), name]:
+            for url_pattern in [
+                f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={enc}",
+                f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&sheet={enc}"
+            ]:
+                try:
+                    df = pd.read_csv(url_pattern)
+                    if validator(df):
+                        df.columns = [str(c).strip() for c in df.columns]
+                        return df, f"Aba ('{name.strip()}')"
+                except Exception:
+                    continue
 
-    # 3. Varredura direta de GIDs comuns (0 até 10 e IDs de 8 dígitos se descobertos)
-    for test_gid in list(range(0, 8)) + list(discovered_gids.values()):
+    # Prioridade 3: Varredura sequencial direta de GIDs comuns (0 a 15)
+    for test_gid in range(0, 16):
         url_scan = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={test_gid}"
         try:
             df = pd.read_csv(url_scan)
@@ -210,15 +226,24 @@ def download_tab_guaranteed(sheet_id, target_kind, candidate_names, discovered_g
 
     return pd.DataFrame(), None
 
-def load_data_pipeline(sheet_id):
-    gids = discover_sheet_gids(sheet_id)
+def load_data_pipeline(sheet_id, manual_var_gid=""):
+    gids = discover_all_gids(sheet_id)
 
-    ext_names = ["EXTRATO BANCARIO", "EXTRATO", "EXTRATO BANCÁRIO", "Extrato Bancario"]
-    var_names = ["CONTAS VARIAVEIS", "CONTAS VARIÁVEIS", "VARIAVEIS", "VARIÁVEIS", "Contas Variáveis", "Contas Variaveis", "Despesas Variáveis"]
-    fix_names = ["CONTAS FIXAS", "FIXAS", "Contas Fixas", "Despesas Fixas"]
+    ext_names = [
+        "EXTRATO BANCARIO", "EXTRATO", "EXTRATO BANCÁRIO", "Extrato Bancario", "EXTRATO BANCARIO "
+    ]
+    # Lista ampliada com espaços no final para contornar qualquer formatação no Sheets
+    var_names = [
+        "CONTAS VARIAVEIS", "CONTAS VARIAVEIS ", "CONTAS VARIAVEIS  ", " CONTAS VARIAVEIS",
+        "CONTAS VARIÁVEIS", "CONTAS VARIÁVEIS ", "VARIAVEIS", "VARIÁVEIS", "VARIAVEIS ",
+        "Contas Variaveis", "Contas Variáveis", "Contas Variaveis "
+    ]
+    fix_names = [
+        "CONTAS FIXAS", "CONTAS FIXAS ", "FIXAS", "Contas Fixas", "Contas Fixas "
+    ]
 
     df_ext, m_e = download_tab_guaranteed(sheet_id, "extrato", ext_names, gids)
-    df_var, m_v = download_tab_guaranteed(sheet_id, "variaveis", var_names, gids)
+    df_var, m_v = download_tab_guaranteed(sheet_id, "variaveis", var_names, gids, manual_var_gid)
     df_fix, m_f = download_tab_guaranteed(sheet_id, "fixas", fix_names, gids)
 
     return {
@@ -242,11 +267,18 @@ st.sidebar.markdown("---")
 unidade_chave = st.sidebar.selectbox("Unidade:", list(CLIENTES.keys()), format_func=lambda x: CLIENTES[x]["nome"])
 periodo_filtro = st.sidebar.selectbox("Competência:", ["Agosto/2026", "Setembro/2026", "CONSOLIDADO DO ANO (2026)"])
 
+# Campo opcional para garantir conexão manual se desejado
+manual_var_gid = st.sidebar.text_input(
+    "GID Contas Variáveis (Opcional):", 
+    value="", 
+    help="Se a aba não for localizada automaticamente, insira o número do gid presente na URL do navegador quando estiver na aba."
+)
+
 if st.sidebar.button("🔄 Sincronizar Base de Dados"):
     st.cache_data.clear()
     st.rerun()
 
-dados = load_data_pipeline(CLIENTES[unidade_chave]["id"])
+dados = load_data_pipeline(CLIENTES[unidade_chave]["id"], manual_var_gid)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📡 Conexão de Dados")
@@ -287,7 +319,7 @@ if not df_ext.empty:
 
 # REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DA COMPETÊNCIA
 def process_contas_competencia(df):
-    if df.empty: return 0.0, 0.0, pd.DataFrame()
+    if df.empty: return 0.0, 0.0, 0.0, pd.DataFrame()
     c_comp = match_col(df, ['Competência', 'Competencia'])
     c_pag = match_col(df, ['Data de Pagamento', 'Pagamento'])
     c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data'])
@@ -299,7 +331,7 @@ def process_contas_competencia(df):
         s_pag = parse_dates_robust(df[c_pag]) if c_pag else pd.Series(index=df.index, dtype='datetime64[ns]')
         s_venc = parse_dates_robust(df[c_venc]) if c_venc else pd.Series(index=df.index, dtype='datetime64[ns]')
         
-        # Prioriza a coluna Competência; se vazia, utiliza Pagamento ou Vencimento
+        # Prioriza Competência; se vazia, utiliza Pagamento ou Vencimento
         df['DT_REF'] = s_comp.fillna(s_pag).fillna(s_venc)
         df['VALOR_NUM'] = df[c_val].apply(clean_currency)
         df['ST_UP'] = df[c_st].astype(str).str.strip().str.upper()
@@ -308,17 +340,21 @@ def process_contas_competencia(df):
         df_f = df[cond].copy()
         
         pago = df_f[df_f['ST_UP'] == 'PAGO']['VALOR_NUM'].sum()
-        pend = df_f[df_f['ST_UP'].isin(['VENCIDO', 'PENDENTE'])]['VALOR_NUM'].sum()
-        return pago, pend, df_f
-    return 0.0, 0.0, pd.DataFrame()
+        vencido = df_f[df_f['ST_UP'] == 'VENCIDO']['VALOR_NUM'].sum()
+        a_vencer = df_f[df_f['ST_UP'] == 'PENDENTE']['VALOR_NUM'].sum()
+        
+        return pago, vencido, a_vencer, df_f
+    return 0.0, 0.0, 0.0, pd.DataFrame()
 
-var_pago, var_pend, df_var_f = process_contas_competencia(df_var)
-fix_pago, fix_pend, df_fix_f = process_contas_competencia(df_fix)
+var_pago, var_venc, var_pend, df_var_f = process_contas_competencia(df_var)
+fix_pago, fix_venc, fix_pend, df_fix_f = process_contas_competencia(df_fix)
 
 saldo_caixa_real = receita_extrato + saidas_extrato
 
-# Total de pendências da competência ativa
-total_pendente_mes = var_pend + fix_pend
+# Total de pendências (Vencidas + A Vencer)
+total_vencido_mes = var_venc + fix_venc
+total_a_vencer_mes = var_pend + fix_pend
+total_pendente_mes = total_vencido_mes + total_a_vencer_mes
 
 # -----------------------------------------------------------------------------
 # 7. DASHBOARD EXECUTIVO: KPI CARDS
@@ -337,7 +373,8 @@ with c4:
     cor_caixa = "#36B37E" if saldo_caixa_real >= 0 else "#FF5630"
     st.markdown(f'<div class="kpi-card" style="border-left-color: {cor_caixa};"><div class="kpi-title">Resultado de Caixa</div><div class="kpi-value">{format_brl(saldo_caixa_real)}</div><div class="kpi-sub">Entradas − Saídas Extrato</div></div>', unsafe_allow_html=True)
 with c5: 
-    st.markdown(f'<div class="kpi-card" style="border-left-color: #6554C0;"><div class="kpi-title">Contas Pendentes</div><div class="kpi-value">{format_brl(total_pendente_mes)}</div><div class="kpi-sub">A Vencer / Vencidas</div></div>', unsafe_allow_html=True)
+    sub_pend = f"{format_brl(total_vencido_mes)} Vencidas | {format_brl(total_a_vencer_mes)} A Vencer" if total_pendente_mes > 0 else "Nenhuma Pendência"
+    st.markdown(f'<div class="kpi-card" style="border-left-color: #6554C0;"><div class="kpi-title">Contas Pendentes</div><div class="kpi-value">{format_brl(total_pendente_mes)}</div><div class="kpi-sub">{sub_pend}</div></div>', unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -374,6 +411,7 @@ def extrair_pendencias(df, tipo):
         df_temp['VENC_DT'] = parse_dates_robust(df_temp[c_venc])
         df_temp['STATUS_UP'] = df_temp[c_st].astype(str).str.strip().str.upper()
         
+        # Filtra títulos não liquidados (PENDENTE ou VENCIDO)
         pendentes = df_temp[df_temp['STATUS_UP'].isin(['PENDENTE', 'VENCIDO'])].copy()
         pendentes['Tipo de Despesa'] = tipo
         pendentes['Fornecedor_Display'] = pendentes[c_forn] if c_forn else '-'
@@ -422,7 +460,7 @@ if not df_agenda_dinamica.empty:
         total_previsto = df_agenda_view['VALOR_NUM'].sum()
         st.error(f"💸 **Total de Pagamentos da Semana / Atrasados:** {format_brl(total_previsto)}")
     else:
-        st.success("✅ Nenhum pagamento pendente registado para a semana atual.")
+        st.success("✅ Nenhum pagamento pendente registrado para a semana atual.")
 else:
     st.success("✅ Nenhuma conta a pagar pendente encontrada no sistema.")
 
@@ -467,4 +505,4 @@ if not df_var_f.empty:
     drop_cols = [c for c in ['DT_REF', 'VALOR_NUM', 'ST_UP'] if c in df_var_view.columns]
     st.dataframe(df_var_view.drop(columns=drop_cols), use_container_width=True)
 else:
-    st.info("Nenhum lançamento de contas variáveis registado para o filtro ativo.")
+    st.info("Nenhum lançamento de contas variáveis registrado para o filtro ativo.")
