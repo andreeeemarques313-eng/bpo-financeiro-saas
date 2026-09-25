@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # -----------------------------------------------------------------------------
-# CONFIGURAÇÃO DE ENGENHARIA DE SOFTWARE E INTERFACE
+# CONFIGURAÇÃO DA INTERFACE E ENGINE
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Portal BPO Financeiro | Grupo Fiño House",
@@ -14,7 +14,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Estilização CSS do Dashboard
+# Estilização CSS Executiva
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -32,7 +32,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# INFRAESTRUTURA DE DADOS E ARQUITETURA MULTI-TENANT
+# BASE DE DADOS E CONEXÃO COM GOOGLE SHEETS
 # -----------------------------------------------------------------------------
 CLIENT_DATABASE = {
     "cliente_tere": {
@@ -46,7 +46,7 @@ CLIENT_DATABASE = {
 }
 
 # -----------------------------------------------------------------------------
-# TRATAMENTO DE DADOS SÊNIOR (ENG. DE DADOS)
+# PARSERS E TRATAMENTO DE DADOS
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if pd.isna(val): 
@@ -69,7 +69,6 @@ def format_brl(val):
 def parse_dates_robust(series):
     if series is None or series.empty:
         return pd.Series(dtype='datetime64[ns]')
-    # Tenta conversão ISO e formato BR (dayfirst)
     parsed = pd.to_datetime(series.astype(str).str.strip(), errors='coerce', dayfirst=True)
     if parsed.isna().sum() > len(series) * 0.5:
         parsed = pd.to_datetime(series.astype(str).str.strip(), errors='coerce')
@@ -85,10 +84,9 @@ def match_col(df, candidates):
             return cols_map[c_clean]
     return None
 
-# Fetcher de Dados com tratamento de erro explicito
-@st.cache_data(ttl=5, show_spinner=False)
+# Fetcher de Dados por URL com encode
+@st.cache_data(ttl=2, show_spinner=False)
 def fetch_sheet_tab(sheet_id, tab_names):
-    errors = []
     for tab_name in tab_names:
         encoded_tab = urllib.parse.quote(tab_name)
         url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&sheet={encoded_tab}"
@@ -98,9 +96,8 @@ def fetch_sheet_tab(sheet_id, tab_names):
                 df.columns = [str(c).strip() for c in df.columns]
                 return df, None
         except Exception as e:
-            errors.append(f"Aba '{tab_name}': {str(e)}")
             continue
-    return pd.DataFrame(), f"Não foi possível carregar as abas {tab_names}. Verifique o acesso público da planilha."
+    return pd.DataFrame(), f"Aba não localizada para o ID {sheet_id}"
 
 def load_all_operational_data(sheet_id):
     df_ext, err_ext = fetch_sheet_tab(sheet_id, ["EXTRATO BANCÁRIO", "EXTRATO BANCARIO", "EXTRATO"])
@@ -111,14 +108,14 @@ def load_all_operational_data(sheet_id):
         "extrato": df_ext,
         "variaveis": df_var,
         "fixas": df_fix,
-        "errors": [e for e in [err_ext, err_var, err_fix] if e and df_ext.empty]
+        "is_empty": df_ext.empty and df_var.empty and df_fix.empty
     }
 
 # -----------------------------------------------------------------------------
-# SIDEBAR E FILTROS
+# INTERFACE E FILTROS LATERAIS
 # -----------------------------------------------------------------------------
 st.sidebar.title("🏢 Portal BPO Financeiro")
-st.sidebar.caption("Alex — Tecnologia & Arquitetura de Dados")
+st.sidebar.caption("Alex — Engenharia de Sistemas & BI")
 st.sidebar.markdown("---")
 
 cliente_key = st.sidebar.selectbox(
@@ -135,13 +132,12 @@ periodo_selecionado = st.sidebar.selectbox(
     ["Agosto/2026", "Setembro/2026", "CONSOLIDADO DO ANO (2026)"]
 )
 
-# Carregamento dos dados
+# Carregamento em Tempo Real
 data_store = load_all_operational_data(cliente_info['sheet_id'])
 
-# Alerta de erro de conexão se a planilha estiver bloqueada no Google
-if data_store["errors"] and data_store["extrato"].empty:
-    st.error("⚠️ **Falha de Comunicação com o Google Sheets**")
-    st.info("A planilha do Google precisa estar configurada como **'Qualquer pessoa com o link pode ver'** no menu Compartilhar.")
+if data_store["is_empty"]:
+    st.error("⚠️ **Atenção: A planilha do Google Sheets não pôde ser lida.**")
+    st.info("Abra a planilha no Google Drive, clique em **Compartilhar** no canto superior direito e mude para **'Qualquer pessoa com o link pode ver'**.")
     st.stop()
 
 df_extrato = data_store["extrato"]
@@ -151,7 +147,7 @@ df_fixas = data_store["fixas"]
 target_month = 8 if "Agosto" in periodo_selecionado else (9 if "Setembro" in periodo_selecionado else None)
 
 # -----------------------------------------------------------------------------
-# ENGINE DE PROCESSAMENTO FINANCEIRO (MARCOS / GUSTAVO / ALEX)
+# CÁLCULOS FINANCEIROS
 # -----------------------------------------------------------------------------
 
 # 1. Extrato Bancário
@@ -234,14 +230,14 @@ if not df_fixas.empty:
                 custo_fixo_pago = df_fixas_f[st_upper_f == 'PAGO']['VALOR_CLEAN'].sum()
                 fixo_vencido = df_fixas_f[st_upper_f.isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
-resultado_caixa = receita_real + saidas_extrato # Saídas são valores negativos no extrato
+resultado_caixa = receita_real + saidas_extrato
 total_pendente = var_vencido + fixo_vencido
 
 # -----------------------------------------------------------------------------
-# DASHBOARD E VISUALIZAÇÃO
+# RENDERIZAÇÃO DO DASHBOARD
 # -----------------------------------------------------------------------------
 st.title(f"📊 Painel Executivo BPO Financeiro — {cliente_info['nome']}")
-st.caption(f"Filtro Ativo: **{periodo_selecionado}** | Engine de Dados Sincronizada")
+st.caption(f"Filtro Ativo: **{periodo_selecionado}** | Dados Atualizados em Tempo Real")
 
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 
@@ -313,7 +309,7 @@ else:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Gráficos de Fluxo de Caixa
+# Gráficos
 st.subheader("📈 Demonstrativo de Fluxo do Período")
 g1, g2 = st.columns([6, 4])
 
