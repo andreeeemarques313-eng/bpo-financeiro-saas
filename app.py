@@ -38,10 +38,6 @@ CLIENT_DATABASE = {
     "cliente_ob": {
         "nome": "Fiño House - Unidade Minas Gerais (OB)",
         "sheet_id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw"
-    },
-    "consolidado": {
-        "nome": "🏢 CONSOLIDADO (GRUPO FIÑO HOUSE)",
-        "sheet_id": "CONSOLIDADO"
     }
 }
 
@@ -76,10 +72,23 @@ def find_column(df, possible_names):
             return cols_clean[name_clean]
     return None
 
-# Carregamento seguro com encode de URL para aceitar acentos
-@st.cache_data(ttl=1)
-def load_operational_data(sheet_id):
-    def get_df_safe(s_id, sheet_names):
+# Carregamento seguro com suporte a leitura de ficheiros locais / upload
+def load_data_from_sources(sheet_id, uploaded_ext, uploaded_var, uploaded_fix):
+    # Se o utilizador fez upload manual de ficheiros na sidebar
+    if uploaded_ext is not None and uploaded_var is not None and uploaded_fix is not None:
+        try:
+            df_ext = pd.read_csv(uploaded_ext)
+            df_v = pd.read_csv(uploaded_var)
+            df_f = pd.read_csv(uploaded_fix)
+            df_ext.columns = [str(c).strip() for c in df_ext.columns]
+            df_v.columns = [str(c).strip() for c in df_v.columns]
+            df_f.columns = [str(c).strip() for c in df_f.columns]
+            return df_ext, df_v, df_f
+        except Exception:
+            pass
+
+    # Tentativa de acesso directo ao Google Sheets por URL
+    def get_df_web(s_id, sheet_names):
         for s_name in sheet_names:
             encoded_name = urllib.parse.quote(s_name)
             url = f"https://docs.google.com/spreadsheets/d/{s_id}/export?format=csv&sheet={encoded_name}"
@@ -92,20 +101,13 @@ def load_operational_data(sheet_id):
                 continue
         return pd.DataFrame()
 
-    if sheet_id == "CONSOLIDADO":
-        e1, v1, f1 = load_operational_data("1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw")
-        e2, v2, f2 = load_operational_data("1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw")
-        df_ext = pd.concat([e1, e2], ignore_index=True).reset_index(drop=True) if not e1.empty or not e2.empty else pd.DataFrame()
-        df_v = pd.concat([v1, v2], ignore_index=True).reset_index(drop=True) if not v1.empty or not v2.empty else pd.DataFrame()
-        df_f = pd.concat([f1, f2], ignore_index=True).reset_index(drop=True) if not f1.empty or not f2.empty else pd.DataFrame()
-        return df_ext, df_v, df_f
-    else:
-        df_ext = get_df_safe(sheet_id, ["EXTRATO BANCÁRIO", "EXTRATO BANCARIO", "EXTRATO"])
-        df_v = get_df_safe(sheet_id, ["CONTAS VARIÁVEIS", "CONTAS VARIAVEIS", "VARIAVEIS"])
-        df_f = get_df_safe(sheet_id, ["CONTAS FIXAS", "FIXAS"])
-        return df_ext, df_v, df_f
+    df_ext = get_df_web(sheet_id, ["EXTRATO BANCÁRIO", "EXTRATO BANCARIO", "EXTRATO"])
+    df_v = get_df_web(sheet_id, ["CONTAS VARIÁVEIS", "CONTAS VARIAVEIS", "VARIAVEIS"])
+    df_f = get_df_web(sheet_id, ["CONTAS FIXAS", "FIXAS"])
 
-# Painel e Filtros
+    return df_ext, df_v, df_f
+
+# Sidebar
 st.sidebar.title("🏢 Portal BPO Financeiro")
 st.sidebar.markdown("---")
 
@@ -121,7 +123,15 @@ st.sidebar.success(f"Conectado: **{cliente_info['nome']}**")
 periodo_opcoes = ["Agosto/2026", "Setembro/2026", "CONSOLIDADO DO ANO (2026)"]
 periodo_selecionado = st.sidebar.selectbox("Competência:", periodo_opcoes)
 
-df_extrato, df_var, df_fixas = load_operational_data(cliente_info['sheet_id'])
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📁 Carregamento Direto (Se Zerado)")
+st.sidebar.caption("Se os dados não carregarem do Google Sheets, selecione os ficheiros CSV locais aqui:")
+
+up_ext = st.sidebar.file_uploader("Extrato Bancário (CSV)", type=["csv"], key="ext")
+up_var = st.sidebar.file_uploader("Contas Variáveis (CSV)", type=["csv"], key="var")
+up_fix = st.sidebar.file_uploader("Contas Fixas (CSV)", type=["csv"], key="fix")
+
+df_extrato, df_var, df_fixas = load_data_from_sources(cliente_info['sheet_id'], up_ext, up_var, up_fix)
 
 target_month = 8 if "Agosto" in periodo_selecionado else (9 if "Setembro" in periodo_selecionado else None)
 
@@ -211,7 +221,7 @@ total_pendente = var_vencido + fixo_vencido
 
 # Exibição do Dashboard
 st.title(f"📊 Painel Executivo BPO Financeiro — {cliente_info['nome']}")
-st.caption(f"Filtro Ativo: **{periodo_selecionado}** | Sincronizado")
+st.caption(f"Filtro Ativo: **{periodo_selecionado}**")
 
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 
