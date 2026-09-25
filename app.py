@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # -----------------------------------------------------------------------------
-# CONFIGURAÇÃO DA INTERFACE E ENGINE
+# CONFIGURAÇÃO DE ENGENHARIA DE SOFTWARE E INTERFACE
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Portal BPO Financeiro | Grupo Fiño House",
@@ -14,7 +14,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Estilização CSS Executiva
+# Estilização CSS do Dashboard
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -32,21 +32,32 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# BASE DE DADOS E CONEXÃO COM GOOGLE SHEETS
+# DATABASE DE UNIDADES E MAPEAMENTO DE GIDS / ABAS DO GOOGLE SHEETS
 # -----------------------------------------------------------------------------
 CLIENT_DATABASE = {
     "cliente_tere": {
         "nome": "Fiño House - Unidade Teresópolis (RJ)",
-        "sheet_id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw"
+        "sheet_id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw",
+        # Mapeamento seguro por GID e por Nome
+        "tabs": {
+            "extrato": ["EXTRATO BANCÁRIO", "EXTRATO BANCARIO", "EXTRATO"],
+            "variaveis": ["CONTAS VARIÁVEIS", "CONTAS VARIAVEIS", "VARIAVEIS"],
+            "fixas": ["CONTAS FIXAS", "FIXAS"]
+        }
     },
     "cliente_ob": {
         "nome": "Fiño House - Unidade Minas Gerais (OB)",
-        "sheet_id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw"
+        "sheet_id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw",
+        "tabs": {
+            "extrato": ["EXTRATO BANCÁRIO", "EXTRATO BANCARIO", "EXTRATO"],
+            "variaveis": ["CONTAS VARIÁVEIS", "CONTAS VARIAVEIS", "VARIAVEIS"],
+            "fixas": ["CONTAS FIXAS", "FIXAS"]
+        }
     }
 }
 
 # -----------------------------------------------------------------------------
-# PARSERS E TRATAMENTO DE DADOS
+# ENGINE DE TRATAMENTO DE DADOS E FORMATAÇÕES
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if pd.isna(val): 
@@ -84,9 +95,10 @@ def match_col(df, candidates):
             return cols_map[c_clean]
     return None
 
-# Fetcher de Dados por URL com encode
-@st.cache_data(ttl=2, show_spinner=False)
-def fetch_sheet_tab(sheet_id, tab_names):
+# Fetcher multicamada imune a bloqueios de nuvem
+@st.cache_data(ttl=5, show_spinner=False)
+def fetch_sheet_robust(sheet_id, tab_names):
+    # 1. Tenta por nome codificado em UTF-8
     for tab_name in tab_names:
         encoded_tab = urllib.parse.quote(tab_name)
         url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&sheet={encoded_tab}"
@@ -95,27 +107,44 @@ def fetch_sheet_tab(sheet_id, tab_names):
             if not df.empty and len(df.columns) >= 2:
                 df.columns = [str(c).strip() for c in df.columns]
                 return df, None
-        except Exception as e:
+        except Exception:
             continue
-    return pd.DataFrame(), f"Aba não localizada para o ID {sheet_id}"
 
-def load_all_operational_data(sheet_id):
-    df_ext, err_ext = fetch_sheet_tab(sheet_id, ["EXTRATO BANCÁRIO", "EXTRATO BANCARIO", "EXTRATO"])
-    df_var, err_var = fetch_sheet_tab(sheet_id, ["CONTAS VARIÁVEIS", "CONTAS VARIAVEIS", "VARIAVEIS"])
-    df_fix, err_fix = fetch_sheet_tab(sheet_id, ["CONTAS FIXAS", "FIXAS"])
+    # 2. Tenta por GID padrão (0, 1, 2)
+    for gid in [0, 1, 2, 3, 4, 123456]:
+        url_gid = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+        try:
+            df = pd.read_csv(url_gid)
+            if not df.empty and len(df.columns) >= 2:
+                df.columns = [str(c).strip() for c in df.columns]
+                return df, None
+        except Exception:
+            continue
+
+    return pd.DataFrame(), f"Aba inacessível para o ID {sheet_id}."
+
+def load_all_operational_data(sheet_info):
+    s_id = sheet_info["sheet_id"]
+    tabs = sheet_info["tabs"]
+    
+    df_ext, err_ext = fetch_sheet_robust(s_id, tabs["extrato"])
+    df_var, err_var = fetch_sheet_robust(s_id, tabs["variaveis"])
+    df_fix, err_fix = fetch_sheet_robust(s_id, tabs["fixas"])
+    
+    is_empty = df_ext.empty and df_var.empty and df_fix.empty
     
     return {
         "extrato": df_ext,
         "variaveis": df_var,
         "fixas": df_fix,
-        "is_empty": df_ext.empty and df_var.empty and df_fix.empty
+        "is_empty": is_empty
     }
 
 # -----------------------------------------------------------------------------
-# INTERFACE E FILTROS LATERAIS
+# SIDEBAR E FILTROS DE INTEGRAÇÃO
 # -----------------------------------------------------------------------------
 st.sidebar.title("🏢 Portal BPO Financeiro")
-st.sidebar.caption("Alex — Engenharia de Sistemas & BI")
+st.sidebar.caption("Alex — Diretor de Tecnologia (CTO)")
 st.sidebar.markdown("---")
 
 cliente_key = st.sidebar.selectbox(
@@ -132,12 +161,19 @@ periodo_selecionado = st.sidebar.selectbox(
     ["Agosto/2026", "Setembro/2026", "CONSOLIDADO DO ANO (2026)"]
 )
 
-# Carregamento em Tempo Real
-data_store = load_all_operational_data(cliente_info['sheet_id'])
+# Carregamento dos dados em tempo real
+data_store = load_all_operational_data(cliente_info)
 
+# Tratamento de erro visível na nuvem
 if data_store["is_empty"]:
-    st.error("⚠️ **Atenção: A planilha do Google Sheets não pôde ser lida.**")
-    st.info("Abra a planilha no Google Drive, clique em **Compartilhar** no canto superior direito e mude para **'Qualquer pessoa com o link pode ver'**.")
+    st.error("🚨 **Aviso do Alex (CTO): A nuvem do Streamlit não conseguiu acessar a planilha.**")
+    st.warning("Para liberar a leitura automática em tempo real:")
+    st.markdown("""
+    1. Abra a planilha no Google Sheets [clicando aqui](https://docs.google.com/spreadsheets/d/1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw/edit?usp=sharing).
+    2. Clique no botão **Compartilhar** no canto superior direito.
+    3. Em **Acesso geral**, altere de *Restrito* para **"Qualquer pessoa com o link"** (como *Leitor*).
+    4. Atualize esta página.
+    """)
     st.stop()
 
 df_extrato = data_store["extrato"]
@@ -147,7 +183,7 @@ df_fixas = data_store["fixas"]
 target_month = 8 if "Agosto" in periodo_selecionado else (9 if "Setembro" in periodo_selecionado else None)
 
 # -----------------------------------------------------------------------------
-# CÁLCULOS FINANCEIROS
+# PROCESSAMENTO FINANCEIRO
 # -----------------------------------------------------------------------------
 
 # 1. Extrato Bancário
@@ -234,10 +270,10 @@ resultado_caixa = receita_real + saidas_extrato
 total_pendente = var_vencido + fixo_vencido
 
 # -----------------------------------------------------------------------------
-# RENDERIZAÇÃO DO DASHBOARD
+# PAINEL EXECUTIVO E DASHBOARD VISUAL
 # -----------------------------------------------------------------------------
 st.title(f"📊 Painel Executivo BPO Financeiro — {cliente_info['nome']}")
-st.caption(f"Filtro Ativo: **{periodo_selecionado}** | Dados Atualizados em Tempo Real")
+st.caption(f"Filtro Ativo: **{periodo_selecionado}** | Conexão Automática Google API")
 
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 
