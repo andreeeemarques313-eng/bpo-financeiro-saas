@@ -1,17 +1,18 @@
 import streamlit as st
 import pandas as pd
+import urllib.parse
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-# Configuração visual e layout da página
+# Configuração da página e layout
 st.set_page_config(
     page_title="Portal BPO Financeiro | Grupo Fiño House",
     page_icon="📊",
     layout="wide"
 )
 
-# Estilização CSS profissional
+# Estilização CSS customizada
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -28,9 +29,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# BASE DE DADOS DOS CLIENTES / UNIDADES
-# -----------------------------------------------------------------------------
+# Base de Dados das Unidades
 CLIENT_DATABASE = {
     "cliente_tere": {
         "nome": "Fiño House - Unidade Teresópolis (RJ)",
@@ -46,9 +45,7 @@ CLIENT_DATABASE = {
     }
 }
 
-# -----------------------------------------------------------------------------
-# FUNÇÕES DE TRATAMENTO E PARSER SEGURO DE DADOS
-# -----------------------------------------------------------------------------
+# Conversor de moeda seguro
 def parse_currency(val):
     if pd.isna(val): return 0.0
     s = str(val).strip().replace('R$', '').replace(' ', '').replace('(', '-').replace(')', '').strip()
@@ -79,20 +76,19 @@ def find_column(df, possible_names):
             return cols_clean[name_clean]
     return None
 
-# -----------------------------------------------------------------------------
-# CARREGAMENTO MULTI-ABA COM TRATAMENTO DE ACENTUAÇÃO E NOME DE ABAS
-# -----------------------------------------------------------------------------
+# Carregamento seguro com encode de URL
 @st.cache_data(ttl=1)
 def load_operational_data(sheet_id):
-    def get_df_multi(s_id, sheet_names):
+    def get_df_safe(s_id, sheet_names):
         for s_name in sheet_names:
-            url = f"https://docs.google.com/spreadsheets/d/{s_id}/export?format=csv&sheet={s_name.replace(' ', '%20')}"
+            encoded_name = urllib.parse.quote(s_name)
+            url = f"https://docs.google.com/spreadsheets/d/{s_id}/export?format=csv&sheet={encoded_name}"
             try:
                 df = pd.read_csv(url)
-                if not df.empty:
+                if not df.empty and len(df.columns) > 1:
                     df.columns = [str(c).strip() for c in df.columns]
                     return df.reset_index(drop=True)
-            except:
+            except Exception:
                 continue
         return pd.DataFrame()
 
@@ -104,14 +100,12 @@ def load_operational_data(sheet_id):
         df_f = pd.concat([f1, f2], ignore_index=True).reset_index(drop=True) if not f1.empty or not f2.empty else pd.DataFrame()
         return df_ext, df_v, df_f
     else:
-        df_ext = get_df_multi(sheet_id, ["EXTRATO BANCARIO", "EXTRATO BANCÁRIO", "EXTRATO"])
-        df_v = get_df_multi(sheet_id, ["CONTAS VARIAVEIS", "CONTAS VARIÁVEIS", "VARIAVEIS"])
-        df_f = get_df_multi(sheet_id, ["CONTAS FIXAS", "FIXAS"])
+        df_ext = get_df_safe(sheet_id, ["EXTRATO BANCÁRIO", "EXTRATO BANCARIO", "EXTRATO"])
+        df_v = get_df_safe(sheet_id, ["CONTAS VARIÁVEIS", "CONTAS VARIAVEIS", "VARIAVEIS"])
+        df_f = get_df_safe(sheet_id, ["CONTAS FIXAS", "FIXAS"])
         return df_ext, df_v, df_f
 
-# -----------------------------------------------------------------------------
-# BARRA LATERAL (SIDEBAR)
-# -----------------------------------------------------------------------------
+# Painel e Filtros
 st.sidebar.title("🏢 Portal BPO Financeiro")
 st.sidebar.markdown("---")
 
@@ -124,7 +118,6 @@ cliente_selected_key = st.sidebar.selectbox(
 cliente_info = CLIENT_DATABASE[cliente_selected_key]
 st.sidebar.success(f"Conectado: **{cliente_info['nome']}**")
 
-st.sidebar.markdown("### 🔍 Filtro de Período")
 periodo_opcoes = ["Agosto/2026", "Setembro/2026", "CONSOLIDADO DO ANO (2026)"]
 periodo_selecionado = st.sidebar.selectbox("Competência:", periodo_opcoes)
 
@@ -132,9 +125,7 @@ df_extrato, df_var, df_fixas = load_operational_data(cliente_info['sheet_id'])
 
 target_month = 8 if "Agosto" in periodo_selecionado else (9 if "Setembro" in periodo_selecionado else None)
 
-# -----------------------------------------------------------------------------
-# PROCESSAMENTO DO EXTRATO BANCÁRIO
-# -----------------------------------------------------------------------------
+# Extrato Bancário
 df_extrato_f = pd.DataFrame()
 receita_real = 0.0
 saidas_extrato = 0.0
@@ -157,9 +148,7 @@ if not df_extrato.empty:
             receita_real = df_extrato_f[df_extrato_f['VALOR_CLEAN'] > 0]['VALOR_CLEAN'].sum()
             saidas_extrato = df_extrato_f[df_extrato_f['VALOR_CLEAN'] < 0]['VALOR_CLEAN'].sum()
 
-# -----------------------------------------------------------------------------
-# PROCESSAMENTO DE CONTAS VARIÁVEIS
-# -----------------------------------------------------------------------------
+# Contas Variáveis
 df_var_f = pd.DataFrame()
 custo_var_pago = 0.0
 var_vencido = 0.0
@@ -188,9 +177,7 @@ if not df_var.empty:
                 custo_var_pago = df_var_f[df_var_f[col_status_var].astype(str).str.strip().str.upper() == 'PAGO']['VALOR_CLEAN'].sum()
                 var_vencido = df_var_f[df_var_f[col_status_var].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
-# -----------------------------------------------------------------------------
-# PROCESSAMENTO DE CONTAS FIXAS
-# -----------------------------------------------------------------------------
+# Contas Fixas
 df_fixas_f = pd.DataFrame()
 custo_fixo_pago = 0.0
 fixo_vencido = 0.0
@@ -219,14 +206,12 @@ if not df_fixas.empty:
                 custo_fixo_pago = df_fixas_f[df_fixas_f[col_status_fix].astype(str).str.strip().str.upper() == 'PAGO']['VALOR_CLEAN'].sum()
                 fixo_vencido = df_fixas_f[df_fixas_f[col_status_fix].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
-resultado_caixa = receita_real + saidas_extrato # Saídas são valores negativos
+resultado_caixa = receita_real + saidas_extrato # Saídas são negativas
 total_pendente = var_vencido + fixo_vencido
 
-# -----------------------------------------------------------------------------
-# PAINEL EXECUTIVO E CARDS DE METRICAS
-# -----------------------------------------------------------------------------
+# Exibição do Dashboard
 st.title(f"📊 Painel Executivo BPO Financeiro — {cliente_info['nome']}")
-st.caption(f"Filtro Ativo: **{periodo_selecionado}** | Sincronização Direta da Planilha")
+st.caption(f"Filtro Ativo: **{periodo_selecionado}** | Sincronizado")
 
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 
@@ -243,11 +228,8 @@ with kpi5:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# AGENDA FINANCEIRA E PREVISÃO DE PAGAMENTOS
-# -----------------------------------------------------------------------------
+# Agenda Financeira
 st.subheader("📅 Agenda Financeira e Previsão de Pagamentos")
-
 ag_col1, ag_col2 = st.columns([4, 6])
 today = datetime.today()
 start_week = today - timedelta(days=today.weekday())
@@ -301,9 +283,7 @@ else:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# GRÁFICOS VISUAIS
-# -----------------------------------------------------------------------------
+# Gráficos de Fluxo
 st.subheader("📈 Demonstrativo de Fluxo do Período")
 g1, g2 = st.columns([6, 4])
 
