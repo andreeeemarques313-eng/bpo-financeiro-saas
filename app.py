@@ -80,18 +80,21 @@ def find_column(df, possible_names):
     return None
 
 # -----------------------------------------------------------------------------
-# CARREGAMENTO DE DADOS COM CACHE
+# CARREGAMENTO MULTI-ABA COM TRATAMENTO DE ACENTUAÇÃO E NOME DE ABAS
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=1)
 def load_operational_data(sheet_id):
-    def get_df(s_id, sheet_name):
-        url = f"https://docs.google.com/spreadsheets/d/{s_id}/export?format=csv&sheet={sheet_name.replace(' ', '%20')}"
-        try:
-            df = pd.read_csv(url)
-            df.columns = [str(c).strip() for c in df.columns]
-            return df.reset_index(drop=True)
-        except:
-            return pd.DataFrame()
+    def get_df_multi(s_id, sheet_names):
+        for s_name in sheet_names:
+            url = f"https://docs.google.com/spreadsheets/d/{s_id}/export?format=csv&sheet={s_name.replace(' ', '%20')}"
+            try:
+                df = pd.read_csv(url)
+                if not df.empty:
+                    df.columns = [str(c).strip() for c in df.columns]
+                    return df.reset_index(drop=True)
+            except:
+                continue
+        return pd.DataFrame()
 
     if sheet_id == "CONSOLIDADO":
         e1, v1, f1 = load_operational_data("1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw")
@@ -101,10 +104,13 @@ def load_operational_data(sheet_id):
         df_f = pd.concat([f1, f2], ignore_index=True).reset_index(drop=True) if not f1.empty or not f2.empty else pd.DataFrame()
         return df_ext, df_v, df_f
     else:
-        return get_df(sheet_id, "EXTRATO BANCARIO"), get_df(sheet_id, "CONTAS VARIAVEIS"), get_df(sheet_id, "CONTAS FIXAS")
+        df_ext = get_df_multi(sheet_id, ["EXTRATO BANCARIO", "EXTRATO BANCÁRIO", "EXTRATO"])
+        df_v = get_df_multi(sheet_id, ["CONTAS VARIAVEIS", "CONTAS VARIÁVEIS", "VARIAVEIS"])
+        df_f = get_df_multi(sheet_id, ["CONTAS FIXAS", "FIXAS"])
+        return df_ext, df_v, df_f
 
 # -----------------------------------------------------------------------------
-# CONTROLE NA BARRA LATERAL (SIDEBAR)
+# BARRA LATERAL (SIDEBAR)
 # -----------------------------------------------------------------------------
 st.sidebar.title("🏢 Portal BPO Financeiro")
 st.sidebar.markdown("---")
@@ -179,8 +185,8 @@ if not df_var.empty:
         if col_val_var:
             df_var_f['VALOR_CLEAN'] = df_var_f[col_val_var].apply(parse_currency)
             if col_status_var:
-                custo_var_pago = df_var_f[df_var_f[col_status_var] == 'PAGO']['VALOR_CLEAN'].sum()
-                var_vencido = df_var_f[df_var_f[col_status_var].isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
+                custo_var_pago = df_var_f[df_var_f[col_status_var].astype(str).str.strip().str.upper() == 'PAGO']['VALOR_CLEAN'].sum()
+                var_vencido = df_var_f[df_var_f[col_status_var].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
 # -----------------------------------------------------------------------------
 # PROCESSAMENTO DE CONTAS FIXAS
@@ -210,17 +216,17 @@ if not df_fixas.empty:
         if col_val_fix:
             df_fixas_f['VALOR_CLEAN'] = df_fixas_f[col_val_fix].apply(parse_currency)
             if col_status_fix:
-                custo_fixo_pago = df_fixas_f[df_fixas_f[col_status_fix] == 'PAGO']['VALOR_CLEAN'].sum()
-                fixo_vencido = df_fixas_f[df_fixas_f[col_status_fix].isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
+                custo_fixo_pago = df_fixas_f[df_fixas_f[col_status_fix].astype(str).str.strip().str.upper() == 'PAGO']['VALOR_CLEAN'].sum()
+                fixo_vencido = df_fixas_f[df_fixas_f[col_status_fix].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
-resultado_caixa = receita_real + saidas_extrato # Saídas são negativas
+resultado_caixa = receita_real + saidas_extrato # Saídas são valores negativos
 total_pendente = var_vencido + fixo_vencido
 
 # -----------------------------------------------------------------------------
-# DASHBOARD DE INDICADORES (KPI CARDS)
+# PAINEL EXECUTIVO E CARDS DE METRICAS
 # -----------------------------------------------------------------------------
 st.title(f"📊 Painel Executivo BPO Financeiro — {cliente_info['nome']}")
-st.caption(f"Filtro Ativo: **{periodo_selecionado}** | Dados Sincronizados")
+st.caption(f"Filtro Ativo: **{periodo_selecionado}** | Sincronização Direta da Planilha")
 
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 
@@ -238,7 +244,7 @@ with kpi5:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# AGENDA FINANCEIRA E COMPROMISSOS
+# AGENDA FINANCEIRA E PREVISÃO DE PAGAMENTOS
 # -----------------------------------------------------------------------------
 st.subheader("📅 Agenda Financeira e Previsão de Pagamentos")
 
@@ -259,8 +265,8 @@ with ag_col2:
 col_status_v = find_column(df_var, ['Status'])
 col_status_f = find_column(df_fixas, ['Status'])
 
-df_ag_v = df_var[df_var[col_status_v].isin(['VENCIDO', 'PENDENTE'])].copy() if not df_var.empty and col_status_v else pd.DataFrame()
-df_ag_f = df_fixas[df_fixas[col_status_f].isin(['VENCIDO', 'PENDENTE'])].copy() if not df_fixas.empty and col_status_f else pd.DataFrame()
+df_ag_v = df_var[df_var[col_status_v].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])].copy() if not df_var.empty and col_status_v else pd.DataFrame()
+df_ag_f = df_fixas[df_fixas[col_status_f].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])].copy() if not df_fixas.empty and col_status_f else pd.DataFrame()
 
 df_ag_all = pd.concat([df_ag_v, df_ag_f], ignore_index=True)
 
@@ -269,7 +275,7 @@ col_stat_all = find_column(df_ag_all, ['Status'])
 
 if not df_ag_all.empty and col_venc_all:
     df_ag_all['VENC_DT'] = parse_any_date(df_ag_all[col_venc_all])
-    cond_venc = (df_ag_all[col_stat_all] == 'VENCIDO') if col_stat_all else False
+    cond_venc = (df_ag_all[col_stat_all].astype(str).str.strip().str.upper() == 'VENCIDO') if col_stat_all else False
     
     if modo_agenda == "Semana Atual Vigente":
         cond_dt = (df_ag_all['VENC_DT'] >= pd.to_datetime(start_week)) & (df_ag_all['VENC_DT'] <= pd.to_datetime(end_week))
