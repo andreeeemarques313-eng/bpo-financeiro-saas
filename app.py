@@ -165,7 +165,7 @@ CLIENTES = {
     "OB": {
         "nome": "Fiño House - Minas Gerais (OB)", 
         "id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw",
-        "gid_variaveis": "2112595527",  # GID MG
+        "gid_variaveis": "1225326443",  # GID MG
         "logo_file": "LOGO FINO HOUSE.png"
     }
 }
