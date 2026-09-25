@@ -76,7 +76,7 @@ def find_column(df, possible_names):
             return cols_clean[name_clean]
     return None
 
-# Carregamento seguro com encode de URL
+# Carregamento seguro com encode de URL para aceitar acentos
 @st.cache_data(ttl=1)
 def load_operational_data(sheet_id):
     def get_df_safe(s_id, sheet_names):
