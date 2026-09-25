@@ -97,7 +97,7 @@ CLIENTES = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. PARSERS E TRATAMENTO DE DADOS COM FALLBACK POR POSIÇÃO
+# 3. PARSERS E TRATAMENTO DE DADOS BLINDADO
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if val is None or pd.isna(val): return 0.0
@@ -169,14 +169,13 @@ def normalize_dataframe(df):
         
     for i in range(min(3, len(df))):
         row_str = " ".join([str(x).upper() for x in df.iloc[i].values])
-        if "VALOR" in row_str or "VENCIMENTO" in row_str or "FORNECEDOR" in row_str:
+        if "VALOR" in row_str or "VENCIMENTO" in row_str or "FORNECEDOR" in row_str or "DATA" in row_str:
             new_cols = [f"Unnamed_{j}" if pd.isna(col) else str(col) for j, col in enumerate(df.iloc[i])]
             df.columns = new_cols
             return df.iloc[i+1:].reset_index(drop=True)
     return df
 
 def match_col(df, candidates, fallback_idx=None):
-    """Busca com fallback por índice caso o nome textual falhe."""
     if df.empty: return None
     cols_map = {str(c).strip().lower(): c for c in df.columns}
     
@@ -192,7 +191,6 @@ def match_col(df, candidates, fallback_idx=None):
                 if clean == 'status' and 'concilia' in k: continue
                 return v
                 
-    # Fallback por posição de coluna se especificado e válido
     if fallback_idx is not None and len(df.columns) > fallback_idx:
         return df.columns[fallback_idx]
         
@@ -205,7 +203,7 @@ def is_valid_extrato(df):
     if df.empty or len(df.columns) < 2: return False
     cols = [str(c).strip().upper() for c in df.columns]
     if 'INDICADOR' in cols: return False
-    return any('DATA' in c for c in cols) and (any('VALOR' in c for c in cols) or any('BANCO' in c for c in cols))
+    return any('DATA' in c for c in cols) or any('VALOR' in c for c in cols) or any('BANCO' in c for c in cols)
 
 def is_valid_contas(df):
     if df.empty or len(df.columns) < 3: return False
@@ -319,18 +317,25 @@ df_var = dados["variaveis"]
 df_fix = dados["fixas"]
 
 # -----------------------------------------------------------------------------
-# 7. PROCESSAMENTO FINANCEIRO COM FALLBACK POR POSIÇÃO
+# 7. PROCESSAMENTO FINANCEIRO COM FALLBACK POR POSIÇÃO (EXTRATO E VARIÁVEIS)
 # -----------------------------------------------------------------------------
 
 receita_extrato, saidas_extrato = 0.0, 0.0
 if not df_ext.empty:
-    c_dt_e = match_col(df_ext, ['DATA', 'DATA ', 'DATA DO LANÇAMENTO', 'DATA_LANCAMENTO'], fallback_idx=0)
-    c_val_e = match_col(df_ext, ['VALOR', 'VALOR (R$)', 'BANCO'], fallback_idx=1)
+    c_dt_e = match_col(df_ext, ['DATA', 'DATA ', 'DATA DO LANÇAMENTO', 'DATA_LANCAMENTO', 'DATA DO LANÇAMENTO '], fallback_idx=0)
+    c_val_e = match_col(df_ext, ['VALOR', 'VALOR (R$)', 'BANCO', 'VALOR LÍQUIDO', 'VALOR LIQUIDO'], fallback_idx=1)
     if c_dt_e and c_val_e:
         dt_s = parse_dates_robust(df_ext[c_dt_e])
         df_ext['VALOR_NUM'] = df_ext[c_val_e].apply(clean_currency)
         df_ext['DT_S'] = dt_s
-        cond_mes = (dt_s.dt.month == target_month) if target_month else True
+        
+        # Filtro de mês adaptável
+        mes_ext_final = dt_s.dt.month
+        if target_month:
+            cond_mes = (mes_ext_final == target_month)
+        else:
+            cond_mes = pd.Series(True, index=df_ext.index)
+            
         df_ext_filtro = df_ext[cond_mes].copy()
         if not df_ext_filtro.empty:
             receita_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] > 0]['VALOR_NUM'].sum()
@@ -341,8 +346,8 @@ def process_contas_competencia(df):
     c_comp = match_col(df, ['Competência', 'Competencia', 'MÊS', 'MES'], fallback_idx=0)
     c_pag = match_col(df, ['Data de Pagamento', 'DATA_PAGAMENTO', 'Data Pagamento', 'ta de Pagame', 'Pagamento'], fallback_idx=2)
     c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data'], fallback_idx=1)
-    c_val = match_col(df, ['Valor', 'Valor (R$)', 'VALOR'], fallback_idx=8) # Coluna I (índice 8) na sua planilha
-    c_st = match_col(df, ['Status', 'Situação', 'STATUS'], fallback_idx=10) # Coluna K (índice 10) na sua planilha
+    c_val = match_col(df, ['Valor', 'Valor (R$)', 'VALOR'], fallback_idx=8)
+    c_st = match_col(df, ['Status', 'Situação', 'STATUS'], fallback_idx=10)
     
     if c_val:
         s_pag = parse_dates_robust(df[c_pag]) if c_pag else pd.Series(index=df.index, dtype='datetime64[ns]')
@@ -425,12 +430,12 @@ with c5:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 9. AGENDA FINANCEIRA E BASE OPERACIONAL (COM DIAGNÓSTICO VISUAL)
+# 9. AGENDA FINANCEIRA E BASE OPERACIONAL (COM PAINEL DE DIAGNÓSTICO DO EXTRATO)
 # -----------------------------------------------------------------------------
-st.markdown("<div class='section-title'>DIAGNÓSTICO DE INTEGRIDADE DA PLANILHA</div>", unsafe_allow_html=True)
-with st.expander("🔍 Clique aqui para ver os dados brutos lidos de Minas Gerais", expanded=False):
-    st.write("Colunas detectadas em Variáveis:", list(df_var.columns) if not df_var.empty else "Vazio")
-    st.dataframe(df_var.head(5) if not df_var.empty else pd.DataFrame(), use_container_width=True)
+st.markdown("<div class='section-title'>DIAGNÓSTICO DE INTEGRIDADE DO EXTRATO</div>", unsafe_allow_html=True)
+with st.expander("🔍 Clique aqui para inspecionar os dados brutos do Extrato Bancário", expanded=False):
+    st.write("Colunas detectadas no Extrato:", list(df_ext.columns) if not df_ext.empty else "Vazio")
+    st.dataframe(df_ext.head(5) if not df_ext.empty else pd.DataFrame(), use_container_width=True)
 
 st.markdown("<div class='section-title'>AGENDA FINANCEIRA VIGENTE</div>", unsafe_allow_html=True)
 hoje = datetime.today()
