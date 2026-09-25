@@ -218,7 +218,7 @@ CLIENTES = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. TRATAMENTO NUMÉRICO E PARSERS AVANÇADOS
+# 3. TRATAMENTO NUMÉRICO E PARSERS AVANÇADOS (SUPORTE A "set.-26" E "16/09/26")
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if val is None or pd.isna(val):
@@ -246,6 +246,7 @@ def format_brl(val):
     return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def parse_dates_robust(series):
+    """Converte datas aceitando formatos ISO, BR com 4 dígitos (16/09/2026) e BR com 2 dígitos (16/09/26)."""
     if series is None or series.empty:
         return pd.Series(dtype='datetime64[ns]')
     s = series.astype(str).str.strip().replace({'nan': None, 'None': None, '': None, 'NaT': None})
@@ -255,12 +256,14 @@ def parse_dates_robust(series):
         return pd.to_datetime(s, dayfirst=True, errors='coerce')
 
 def extrair_mes_inteligente(val):
+    """Extrai o mês aceitando padrões como 'set.-26', 'ago.-26', '09/2026', 'Setembro', '2026-09-16'."""
     if pd.isna(val):
         return None
     s = str(val).strip().upper()
     if not s or s in ['NAN', 'NONE', '']:
         return None
     
+    # Mapeamento com e sem ponto/traço (ex: 'SET.-26' -> 9)
     mapa_meses = {
         'JAN': 1, 'FEV': 2, 'MAR': 3, 'ABR': 4, 'MAI': 5, 'JUN': 6,
         'JUL': 7, 'AGO': 8, 'SET': 9, 'OUT': 10, 'NOV': 11, 'DEZ': 12
@@ -269,13 +272,15 @@ def extrair_mes_inteligente(val):
         if abrev in s:
             return num
 
+    # Parsing para datas normais
     try:
-        dt = pd.to_datetime(s, dayfirst=True, errors='coerce')
+        dt = pd.to_datetime(s, format='mixed', dayfirst=True, errors='coerce')
         if pd.notna(dt):
             return dt.month
     except Exception:
         pass
     
+    # Regex para padrões numéricos como '09/26' ou '09/2026'
     m = re.search(r'\b(0?[1-9]|1[0-2])[/.-]\d{2,4}\b', s)
     if m:
         try:
@@ -291,6 +296,10 @@ def match_col(df, candidates):
     for cand in candidates:
         clean = cand.strip().lower()
         if clean in cols_map: return cols_map[clean]
+        # Match parcial caso o cabeçalho esteja truncado como 'ta de pagame'
+        for k, v in cols_map.items():
+            if clean in k or k in clean:
+                return v
     return None
 
 # -----------------------------------------------------------------------------
@@ -306,7 +315,7 @@ def is_valid_contas(df):
     if df.empty or len(df.columns) < 3: return False
     cols = [str(c).strip().upper() for c in df.columns]
     if 'INDICADOR' in cols: return False
-    has_date = any('VENCIMENTO' in c or 'PAGAMENTO' in c or 'COMPETÊNCIA' in c or 'COMPETENCIA' in c for c in cols)
+    has_date = any('VENCIMENTO' in c or 'PAGAM' in c or 'COMPET' in c for c in cols)
     has_val = any('VALOR' in c for c in cols)
     return has_date and has_val
 
@@ -346,7 +355,7 @@ def download_tab_robust(sheet_id, target_kind, candidate_names, manual_gid=""):
             if validator(df):
                 return df, f"GID ({gid_clean})"
 
-    # 2. Variações Nominais da Aba
+    # 2. Variações Nominais da Aba (Sem acento e com acento)
     for name in candidate_names:
         for enc in [urllib.parse.quote(name), urllib.parse.quote_plus(name), name]:
             for u in [
@@ -403,7 +412,7 @@ st.sidebar.markdown("---")
 unidade_chave = st.sidebar.selectbox("Unidade:", list(CLIENTES.keys()), format_func=lambda x: CLIENTES[x]["nome"])
 periodo_filtro = st.sidebar.selectbox("Competência:", ["Setembro/2026", "Agosto/2026", "CONSOLIDADO DO ANO (2026)"])
 
-# GID fixo com isolamento de chave por unidade
+# GID fixo amarrado à unidade ativa
 default_gid = CLIENTES[unidade_chave].get("gid_variaveis", "")
 manual_var_gid = st.sidebar.text_input(
     "🔑 GID Contas Variáveis:",
@@ -444,7 +453,7 @@ df_var = dados["variaveis"]
 df_fix = dados["fixas"]
 
 # -----------------------------------------------------------------------------
-# 7. PROCESSAMENTO FINANCEIRO COM ENGINE RESILIENTE
+# 7. PROCESSAMENTO FINANCEIRO COM ENGINE RESILIENTE (TOLERÂNCIA A "set.-26")
 # -----------------------------------------------------------------------------
 
 # REGRA 1: ENTRADAS EXCLUSIVAS DO EXTRATO BANCÁRIO
@@ -460,18 +469,17 @@ if not df_ext.empty:
         df_ext['DT_S'] = dt_s
         
         cond_mes = (dt_s.dt.month == target_month) if target_month else True
-        cond_ano = (dt_s.dt.year == 2026) if (dt_s.dt.year == 2026).any() else True
-        df_ext_filtro = df_ext[cond_mes & cond_ano].copy()
+        df_ext_filtro = df_ext[cond_mes].copy()
         
         if not df_ext_filtro.empty:
             receita_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] > 0]['VALOR_NUM'].sum()
             saidas_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] < 0]['VALOR_NUM'].sum()
 
-# REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DA COMPETÊNCIA (MOTOR DE ALTA TOLERÂNCIA)
+# REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DA COMPETÊNCIA (MOTOR DE ALTA PRECISÃO)
 def process_contas_competencia(df):
     if df.empty: return 0.0, 0.0, 0.0, pd.DataFrame()
     c_comp = match_col(df, ['Competência', 'Competencia', 'COMPETENCIA', 'COMPETÊNCIA', 'MÊS', 'MES'])
-    c_pag = match_col(df, ['Data de Pagamento', 'Pagamento', 'DATA_PAGAMENTO', 'DATA PAGAMENTO', 'PAGTO'])
+    c_pag = match_col(df, ['Data de Pagamento', 'Pagamento', 'DATA_PAGAMENTO', 'DATA PAGAMENTO', 'PAGTO', 'Data de Pagame', 'ta de Pagame'])
     c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data', 'DATA_VENCIMENTO'])
     c_val = match_col(df, ['Valor', 'Valor (R$)', 'VALOR'])
     c_st = match_col(df, ['Status', 'Situação', 'STATUS', 'SITUACAO'])
@@ -480,26 +488,26 @@ def process_contas_competencia(df):
         s_pag = parse_dates_robust(df[c_pag]) if c_pag else pd.Series(index=df.index, dtype='datetime64[ns]')
         s_venc = parse_dates_robust(df[c_venc]) if c_venc else pd.Series(index=df.index, dtype='datetime64[ns]')
         
-        # 1. Extração do mês
+        # 1. Extração do mês da coluna Competência (reconhece 'set.-26', 'ago.-26', etc.)
         mes_comp = df[c_comp].apply(extrair_mes_inteligente) if c_comp else pd.Series(index=df.index, dtype='object')
         mes_pag = s_pag.dt.month
         mes_venc = s_venc.dt.month
         
-        # Mês definitivo com prioridade de preenchimento
+        # Mês consolidado
         mes_final = mes_comp.fillna(mes_pag).fillna(mes_venc)
         
         df['DT_REF'] = s_pag.fillna(s_venc)
         df['VALOR_NUM'] = df[c_val].apply(clean_currency)
         df['ST_UP'] = df[c_st].astype(str).str.strip().str.upper()
         
-        # 2. Classificação tolerante a erros de digitação de status
+        # 2. Classificação de status
         status_pago = df['ST_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
         status_vencido = df['ST_UP'].str.contains('VENC|ATRAS', regex=True, na=False) & (~status_pago)
         status_pendente = df['ST_UP'].str.contains('PEND|ABERT|A VENCER', regex=True, na=False) & (~status_pago)
         
         # 3. Filtro por competência ativa
         if target_month:
-            # Uma conta paga pertence ao mês se a competência bater OU se a data de pagamento bater
+            # Reconhece como pago se a competência for o mês ativo OU se a data de quitação for no mês ativo
             cond_pago_mes = status_pago & ((mes_comp == target_month) | (mes_pag == target_month) | (mes_final == target_month))
             cond_vencido_mes = status_vencido & (mes_final == target_month)
             cond_pendente_mes = status_pendente & (mes_final == target_month)
@@ -715,11 +723,6 @@ with g2:
 
 st.markdown("---")
 st.markdown("<div class='section-title'>BASE OPERACIONAL — LANÇAMENTOS DO PERÍODO</div>", unsafe_allow_html=True)
-if not df_var.empty:
-    with st.expander("🔍 Auditoria de Variáveis Carregadas (Diagnóstico da Planilha)", expanded=False):
-        st.caption("Visão bruta das colunas da planilha para conferência contábil:")
-        st.dataframe(df_var.head(15), use_container_width=True)
-
 if not df_var_f.empty:
     df_var_view = df_var_f.copy()
     c_v_show = match_col(df_var_view, ['Valor', 'Valor (R$)'])
