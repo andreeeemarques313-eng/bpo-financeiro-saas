@@ -5,14 +5,16 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-# Configuração da página e layout
+# -----------------------------------------------------------------------------
+# CONFIGURAÇÃO DE ENGENHARIA DE SOFTWARE E INTERFACE
+# -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Portal BPO Financeiro | Grupo Fiño House",
     page_icon="📊",
     layout="wide"
 )
 
-# Estilização CSS customizada
+# Estilização CSS do Dashboard
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
@@ -24,12 +26,14 @@ st.markdown("""
         border-left: 5px solid #1E3A8A;
         margin-bottom: 10px;
     }
-    .kpi-title { font-size: 12px; color: #6B7280; font-weight: 600; text-transform: uppercase; }
-    .kpi-value { font-size: 22px; color: #111827; font-weight: bold; margin-top: 4px; }
+    .kpi-title { font-size: 11px; color: #6B7280; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+    .kpi-value { font-size: 22px; color: #111827; font-weight: 800; margin-top: 4px; }
     </style>
 """, unsafe_allow_html=True)
 
-# Base de Dados das Unidades
+# -----------------------------------------------------------------------------
+# INFRAESTRUTURA DE DADOS E ARQUITETURA MULTI-TENANT
+# -----------------------------------------------------------------------------
 CLIENT_DATABASE = {
     "cliente_tere": {
         "nome": "Fiño House - Unidade Teresópolis (RJ)",
@@ -41,187 +45,203 @@ CLIENT_DATABASE = {
     }
 }
 
-# Conversor de moeda seguro
-def parse_currency(val):
-    if pd.isna(val): return 0.0
+# -----------------------------------------------------------------------------
+# TRATAMENTO DE DADOS SÊNIOR (ENG. DE DADOS)
+# -----------------------------------------------------------------------------
+def clean_currency(val):
+    if pd.isna(val): 
+        return 0.0
     s = str(val).strip().replace('R$', '').replace(' ', '').replace('(', '-').replace(')', '').strip()
-    if not s or s in ['-', '#REF!', '#N/A', 'nan', 'None']: return 0.0
+    if not s or s in ['-', '#REF!', '#N/A', 'nan', 'None']: 
+        return 0.0
     if ',' in s and '.' in s:
         s = s.replace('.', '').replace(',', '.')
     elif ',' in s:
         s = s.replace(',', '.')
     try:
         return float(s)
-    except:
+    except Exception:
         return 0.0
 
 def format_brl(val):
     return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def parse_any_date(series):
+def parse_dates_robust(series):
     if series is None or series.empty:
         return pd.Series(dtype='datetime64[ns]')
-    return pd.to_datetime(series.astype(str).str.strip(), errors='coerce')
+    # Tenta conversão ISO e formato BR (dayfirst)
+    parsed = pd.to_datetime(series.astype(str).str.strip(), errors='coerce', dayfirst=True)
+    if parsed.isna().sum() > len(series) * 0.5:
+        parsed = pd.to_datetime(series.astype(str).str.strip(), errors='coerce')
+    return parsed
 
-def find_column(df, possible_names):
-    if df.empty: return None
-    cols_clean = {str(c).strip().lower(): c for c in df.columns}
-    for name in possible_names:
-        name_clean = name.strip().lower()
-        if name_clean in cols_clean:
-            return cols_clean[name_clean]
+def match_col(df, candidates):
+    if df.empty: 
+        return None
+    cols_map = {str(c).strip().lower(): c for c in df.columns}
+    for cand in candidates:
+        c_clean = cand.strip().lower()
+        if c_clean in cols_map:
+            return cols_map[c_clean]
     return None
 
-# Carregamento seguro com suporte a leitura de ficheiros locais / upload
-def load_data_from_sources(sheet_id, uploaded_ext, uploaded_var, uploaded_fix):
-    # Se o utilizador fez upload manual de ficheiros na sidebar
-    if uploaded_ext is not None and uploaded_var is not None and uploaded_fix is not None:
+# Fetcher de Dados com tratamento de erro explicito
+@st.cache_data(ttl=5, show_spinner=False)
+def fetch_sheet_tab(sheet_id, tab_names):
+    errors = []
+    for tab_name in tab_names:
+        encoded_tab = urllib.parse.quote(tab_name)
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&sheet={encoded_tab}"
         try:
-            df_ext = pd.read_csv(uploaded_ext)
-            df_v = pd.read_csv(uploaded_var)
-            df_f = pd.read_csv(uploaded_fix)
-            df_ext.columns = [str(c).strip() for c in df_ext.columns]
-            df_v.columns = [str(c).strip() for c in df_v.columns]
-            df_f.columns = [str(c).strip() for c in df_f.columns]
-            return df_ext, df_v, df_f
-        except Exception:
-            pass
+            df = pd.read_csv(url)
+            if not df.empty and len(df.columns) >= 2:
+                df.columns = [str(c).strip() for c in df.columns]
+                return df, None
+        except Exception as e:
+            errors.append(f"Aba '{tab_name}': {str(e)}")
+            continue
+    return pd.DataFrame(), f"Não foi possível carregar as abas {tab_names}. Verifique o acesso público da planilha."
 
-    # Tentativa de acesso directo ao Google Sheets por URL
-    def get_df_web(s_id, sheet_names):
-        for s_name in sheet_names:
-            encoded_name = urllib.parse.quote(s_name)
-            url = f"https://docs.google.com/spreadsheets/d/{s_id}/export?format=csv&sheet={encoded_name}"
-            try:
-                df = pd.read_csv(url)
-                if not df.empty and len(df.columns) > 1:
-                    df.columns = [str(c).strip() for c in df.columns]
-                    return df.reset_index(drop=True)
-            except Exception:
-                continue
-        return pd.DataFrame()
+def load_all_operational_data(sheet_id):
+    df_ext, err_ext = fetch_sheet_tab(sheet_id, ["EXTRATO BANCÁRIO", "EXTRATO BANCARIO", "EXTRATO"])
+    df_var, err_var = fetch_sheet_tab(sheet_id, ["CONTAS VARIÁVEIS", "CONTAS VARIAVEIS", "VARIAVEIS"])
+    df_fix, err_fix = fetch_sheet_tab(sheet_id, ["CONTAS FIXAS", "FIXAS"])
+    
+    return {
+        "extrato": df_ext,
+        "variaveis": df_var,
+        "fixas": df_fix,
+        "errors": [e for e in [err_ext, err_var, err_fix] if e and df_ext.empty]
+    }
 
-    df_ext = get_df_web(sheet_id, ["EXTRATO BANCÁRIO", "EXTRATO BANCARIO", "EXTRATO"])
-    df_v = get_df_web(sheet_id, ["CONTAS VARIÁVEIS", "CONTAS VARIAVEIS", "VARIAVEIS"])
-    df_f = get_df_web(sheet_id, ["CONTAS FIXAS", "FIXAS"])
-
-    return df_ext, df_v, df_f
-
-# Sidebar
+# -----------------------------------------------------------------------------
+# SIDEBAR E FILTROS
+# -----------------------------------------------------------------------------
 st.sidebar.title("🏢 Portal BPO Financeiro")
+st.sidebar.caption("Alex — Tecnologia & Arquitetura de Dados")
 st.sidebar.markdown("---")
 
-cliente_selected_key = st.sidebar.selectbox(
+cliente_key = st.sidebar.selectbox(
     "Unidade Selecionada:",
     options=list(CLIENT_DATABASE.keys()),
     format_func=lambda x: CLIENT_DATABASE[x]["nome"]
 )
 
-cliente_info = CLIENT_DATABASE[cliente_selected_key]
+cliente_info = CLIENT_DATABASE[cliente_key]
 st.sidebar.success(f"Conectado: **{cliente_info['nome']}**")
 
-periodo_opcoes = ["Agosto/2026", "Setembro/2026", "CONSOLIDADO DO ANO (2026)"]
-periodo_selecionado = st.sidebar.selectbox("Competência:", periodo_opcoes)
+periodo_selecionado = st.sidebar.selectbox(
+    "Competência:",
+    ["Agosto/2026", "Setembro/2026", "CONSOLIDADO DO ANO (2026)"]
+)
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📁 Carregamento Direto (Se Zerado)")
-st.sidebar.caption("Se os dados não carregarem do Google Sheets, selecione os ficheiros CSV locais aqui:")
+# Carregamento dos dados
+data_store = load_all_operational_data(cliente_info['sheet_id'])
 
-up_ext = st.sidebar.file_uploader("Extrato Bancário (CSV)", type=["csv"], key="ext")
-up_var = st.sidebar.file_uploader("Contas Variáveis (CSV)", type=["csv"], key="var")
-up_fix = st.sidebar.file_uploader("Contas Fixas (CSV)", type=["csv"], key="fix")
+# Alerta de erro de conexão se a planilha estiver bloqueada no Google
+if data_store["errors"] and data_store["extrato"].empty:
+    st.error("⚠️ **Falha de Comunicação com o Google Sheets**")
+    st.info("A planilha do Google precisa estar configurada como **'Qualquer pessoa com o link pode ver'** no menu Compartilhar.")
+    st.stop()
 
-df_extrato, df_var, df_fixas = load_data_from_sources(cliente_info['sheet_id'], up_ext, up_var, up_fix)
+df_extrato = data_store["extrato"]
+df_var = data_store["variaveis"]
+df_fixas = data_store["fixas"]
 
 target_month = 8 if "Agosto" in periodo_selecionado else (9 if "Setembro" in periodo_selecionado else None)
 
-# Extrato Bancário
+# -----------------------------------------------------------------------------
+# ENGINE DE PROCESSAMENTO FINANCEIRO (MARCOS / GUSTAVO / ALEX)
+# -----------------------------------------------------------------------------
+
+# 1. Extrato Bancário
+receita_real, saidas_extrato = 0.0, 0.0
 df_extrato_f = pd.DataFrame()
-receita_real = 0.0
-saidas_extrato = 0.0
 
 if not df_extrato.empty:
-    col_date_ext = find_column(df_extrato, ['DATA', 'DATA ', 'DATA DO LANÇAMENTO'])
-    col_val_ext = find_column(df_extrato, ['VALOR', 'VALOR (R$)', 'BANCO'])
+    col_dt_e = match_col(df_extrato, ['DATA', 'DATA ', 'DATA DO LANÇAMENTO'])
+    col_val_e = match_col(df_extrato, ['VALOR', 'VALOR (R$)', 'BANCO'])
     
-    if col_date_ext and col_val_ext:
-        dt_ext_series = parse_any_date(df_extrato[col_date_ext])
-        df_extrato['DT_PARSED'] = dt_ext_series
-        df_extrato['VALOR_CLEAN'] = df_extrato[col_val_ext].apply(parse_currency)
+    if col_dt_e and col_val_e:
+        dt_e_series = parse_dates_robust(df_extrato[col_dt_e])
+        df_extrato['DT_PARSED'] = dt_e_series
+        df_extrato['VALOR_CLEAN'] = df_extrato[col_val_e].apply(clean_currency)
         
         if target_month:
-            df_extrato_f = df_extrato[(dt_ext_series.dt.month == target_month) & (dt_ext_series.dt.year == 2026)].copy()
+            df_extrato_f = df_extrato[(dt_e_series.dt.month == target_month) & (dt_e_series.dt.year == 2026)].copy()
         else:
-            df_extrato_f = df_extrato[dt_ext_series.dt.year == 2026].copy()
+            df_extrato_f = df_extrato[dt_e_series.dt.year == 2026].copy()
 
         if not df_extrato_f.empty:
             receita_real = df_extrato_f[df_extrato_f['VALOR_CLEAN'] > 0]['VALOR_CLEAN'].sum()
             saidas_extrato = df_extrato_f[df_extrato_f['VALOR_CLEAN'] < 0]['VALOR_CLEAN'].sum()
 
-# Contas Variáveis
+# 2. Contas Variáveis
+custo_var_pago, var_vencido = 0.0, 0.0
 df_var_f = pd.DataFrame()
-custo_var_pago = 0.0
-var_vencido = 0.0
 
 if not df_var.empty:
-    col_pag = find_column(df_var, ['Data de Pagamento'])
-    col_venc = find_column(df_var, ['Vencimento'])
+    col_pag_v = match_col(df_var, ['Data de Pagamento'])
+    col_venc_v = match_col(df_var, ['Vencimento'])
     
-    s_pag = parse_any_date(df_var[col_pag]) if col_pag else pd.Series(index=df_var.index, dtype='datetime64[ns]')
-    s_venc = parse_any_date(df_var[col_venc]) if col_venc else pd.Series(index=df_var.index, dtype='datetime64[ns]')
+    s_pag_v = parse_dates_robust(df_var[col_pag_v]) if col_pag_v else pd.Series(index=df_var.index, dtype='datetime64[ns]')
+    s_venc_v = parse_dates_robust(df_var[col_venc_v]) if col_venc_v else pd.Series(index=df_var.index, dtype='datetime64[ns]')
     
-    dt_final_var = s_pag.fillna(s_venc)
-    df_var['DT_PARSED'] = dt_final_var
+    dt_final_v = s_pag_v.fillna(s_venc_v)
+    df_var['DT_PARSED'] = dt_final_v
 
     if target_month:
-        df_var_f = df_var[(dt_final_var.dt.month == target_month) & (dt_final_var.dt.year == 2026)].copy()
+        df_var_f = df_var[(dt_final_v.dt.month == target_month) & (dt_final_v.dt.year == 2026)].copy()
     else:
-        df_var_f = df_var[dt_final_var.dt.year == 2026].copy()
+        df_var_f = df_var[dt_final_v.dt.year == 2026].copy()
 
     if not df_var_f.empty:
-        col_val_var = find_column(df_var_f, ['Valor', 'Valor (R$)'])
-        col_status_var = find_column(df_var_f, ['Status'])
-        if col_val_var:
-            df_var_f['VALOR_CLEAN'] = df_var_f[col_val_var].apply(parse_currency)
-            if col_status_var:
-                custo_var_pago = df_var_f[df_var_f[col_status_var].astype(str).str.strip().str.upper() == 'PAGO']['VALOR_CLEAN'].sum()
-                var_vencido = df_var_f[df_var_f[col_status_var].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
+        col_val_v = match_col(df_var_f, ['Valor', 'Valor (R$)'])
+        col_st_v = match_col(df_var_f, ['Status'])
+        if col_val_v:
+            df_var_f['VALOR_CLEAN'] = df_var_f[col_val_v].apply(clean_currency)
+            if col_st_v:
+                st_upper_v = df_var_f[col_st_v].astype(str).str.strip().str.upper()
+                custo_var_pago = df_var_f[st_upper_v == 'PAGO']['VALOR_CLEAN'].sum()
+                var_vencido = df_var_f[st_upper_v.isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
-# Contas Fixas
+# 3. Contas Fixas
+custo_fixo_pago, fixo_vencido = 0.0, 0.0
 df_fixas_f = pd.DataFrame()
-custo_fixo_pago = 0.0
-fixo_vencido = 0.0
 
 if not df_fixas.empty:
-    col_pag_f = find_column(df_fixas, ['Data de Pagamento'])
-    col_venc_f = find_column(df_fixas, ['Vencimento'])
+    col_pag_f = match_col(df_fixas, ['Data de Pagamento'])
+    col_venc_f = match_col(df_fixas, ['Vencimento'])
     
-    s_pag_f = parse_any_date(df_fixas[col_pag_f]) if col_pag_f else pd.Series(index=df_fixas.index, dtype='datetime64[ns]')
-    s_venc_f = parse_any_date(df_fixas[col_venc_f]) if col_venc_f else pd.Series(index=df_fixas.index, dtype='datetime64[ns]')
+    s_pag_f = parse_dates_robust(df_fixas[col_pag_f]) if col_pag_f else pd.Series(index=df_fixas.index, dtype='datetime64[ns]')
+    s_venc_f = parse_dates_robust(df_fixas[col_venc_f]) if col_venc_f else pd.Series(index=df_fixas.index, dtype='datetime64[ns]')
     
-    dt_final_fix = s_pag_f.fillna(s_venc_f)
-    df_fixas['DT_PARSED'] = dt_final_fix
+    dt_final_f = s_pag_f.fillna(s_venc_f)
+    df_fixas['DT_PARSED'] = dt_final_f
 
     if target_month:
-        df_fixas_f = df_fixas[(dt_final_fix.dt.month == target_month) & (dt_final_fix.dt.year == 2026)].copy()
+        df_fixas_f = df_fixas[(dt_final_f.dt.month == target_month) & (dt_final_f.dt.year == 2026)].copy()
     else:
-        df_fixas_f = df_fixas[dt_final_fix.dt.year == 2026].copy()
+        df_fixas_f = df_fixas[dt_final_f.dt.year == 2026].copy()
 
     if not df_fixas_f.empty:
-        col_val_fix = find_column(df_fixas_f, ['Valor', 'Valor (R$)'])
-        col_status_fix = find_column(df_fixas_f, ['Status'])
-        if col_val_fix:
-            df_fixas_f['VALOR_CLEAN'] = df_fixas_f[col_val_fix].apply(parse_currency)
-            if col_status_fix:
-                custo_fixo_pago = df_fixas_f[df_fixas_f[col_status_fix].astype(str).str.strip().str.upper() == 'PAGO']['VALOR_CLEAN'].sum()
-                fixo_vencido = df_fixas_f[df_fixas_f[col_status_fix].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
+        col_val_f = match_col(df_fixas_f, ['Valor', 'Valor (R$)'])
+        col_st_f = match_col(df_fixas_f, ['Status'])
+        if col_val_f:
+            df_fixas_f['VALOR_CLEAN'] = df_fixas_f[col_val_f].apply(clean_currency)
+            if col_st_f:
+                st_upper_f = df_fixas_f[col_st_f].astype(str).str.strip().str.upper()
+                custo_fixo_pago = df_fixas_f[st_upper_f == 'PAGO']['VALOR_CLEAN'].sum()
+                fixo_vencido = df_fixas_f[st_upper_f.isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
-resultado_caixa = receita_real + saidas_extrato # Saídas são negativas
+resultado_caixa = receita_real + saidas_extrato # Saídas são valores negativos no extrato
 total_pendente = var_vencido + fixo_vencido
 
-# Exibição do Dashboard
+# -----------------------------------------------------------------------------
+# DASHBOARD E VISUALIZAÇÃO
+# -----------------------------------------------------------------------------
 st.title(f"📊 Painel Executivo BPO Financeiro — {cliente_info['nome']}")
-st.caption(f"Filtro Ativo: **{periodo_selecionado}**")
+st.caption(f"Filtro Ativo: **{periodo_selecionado}** | Engine de Dados Sincronizada")
 
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 
@@ -254,19 +274,19 @@ with ag_col2:
     else:
         st.info(f"📆 **Semana Vigente:** {start_week.strftime('%d/%m/%Y')} até {end_week.strftime('%d/%m/%Y')}")
 
-col_status_v = find_column(df_var, ['Status'])
-col_status_f = find_column(df_fixas, ['Status'])
+col_st_v_all = match_col(df_var, ['Status'])
+col_st_f_all = match_col(df_fixas, ['Status'])
 
-df_ag_v = df_var[df_var[col_status_v].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])].copy() if not df_var.empty and col_status_v else pd.DataFrame()
-df_ag_f = df_fixas[df_fixas[col_status_f].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])].copy() if not df_fixas.empty and col_status_f else pd.DataFrame()
+df_ag_v = df_var[df_var[col_st_v_all].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])].copy() if not df_var.empty and col_st_v_all else pd.DataFrame()
+df_ag_f = df_fixas[df_fixas[col_st_f_all].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])].copy() if not df_fixas.empty and col_st_f_all else pd.DataFrame()
 
 df_ag_all = pd.concat([df_ag_v, df_ag_f], ignore_index=True)
 
-col_venc_all = find_column(df_ag_all, ['Vencimento', 'Data de Pagamento'])
-col_stat_all = find_column(df_ag_all, ['Status'])
+col_venc_all = match_col(df_ag_all, ['Vencimento', 'Data de Pagamento'])
+col_stat_all = match_col(df_ag_all, ['Status'])
 
 if not df_ag_all.empty and col_venc_all:
-    df_ag_all['VENC_DT'] = parse_any_date(df_ag_all[col_venc_all])
+    df_ag_all['VENC_DT'] = parse_dates_robust(df_ag_all[col_venc_all])
     cond_venc = (df_ag_all[col_stat_all].astype(str).str.strip().str.upper() == 'VENCIDO') if col_stat_all else False
     
     if modo_agenda == "Semana Atual Vigente":
@@ -278,13 +298,13 @@ if not df_ag_all.empty and col_venc_all:
             cond_dt = (df_ag_all['VENC_DT'] >= pd.to_datetime(start_week)) & (df_ag_all['VENC_DT'] <= pd.to_datetime(end_week))
 
     df_ag_filt = df_ag_all[cond_venc | cond_dt].copy()
-    col_val_ag = find_column(df_ag_filt, ['Valor', 'Valor (R$)'])
+    col_val_ag = match_col(df_ag_filt, ['Valor', 'Valor (R$)'])
     
     if not df_ag_filt.empty and col_val_ag:
-        df_ag_filt['Valor Exibição'] = df_ag_filt[col_val_ag].apply(lambda x: format_brl(parse_currency(x)))
+        df_ag_filt['Valor Exibição'] = df_ag_filt[col_val_ag].apply(lambda x: format_brl(clean_currency(x)))
         show_cols = [c for c in ['Vencimento', 'Fornecedor', 'Descrição', 'Categoria', 'Valor Exibição', 'Status'] if c in df_ag_filt.columns]
         st.dataframe(df_ag_filt[show_cols], use_container_width=True)
-        tot_ag = df_ag_filt[col_val_ag].apply(parse_currency).sum()
+        tot_ag = df_ag_filt[col_val_ag].apply(clean_currency).sum()
         st.error(f"⚠️ **Total da Agenda no Período:** {format_brl(tot_ag)}")
     else:
         st.success("✅ **Nenhum compromisso pendente no período selecionado.**")
@@ -293,7 +313,7 @@ else:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Gráficos de Fluxo
+# Gráficos de Fluxo de Caixa
 st.subheader("📈 Demonstrativo de Fluxo do Período")
 g1, g2 = st.columns([6, 4])
 
@@ -323,9 +343,9 @@ st.markdown("---")
 st.subheader("📋 Tabela Operacional de Lançamentos")
 if not df_var_f.empty:
     df_var_disp = df_var_f.copy()
-    c_v = find_column(df_var_disp, ['Valor', 'Valor (R$)'])
+    c_v = match_col(df_var_disp, ['Valor', 'Valor (R$)'])
     if c_v:
-        df_var_disp['Valor (R$)'] = df_var_disp[c_v].apply(lambda x: format_brl(parse_currency(x)))
+        df_var_disp['Valor (R$)'] = df_var_disp[c_v].apply(lambda x: format_brl(clean_currency(x)))
     st.dataframe(df_var_disp, use_container_width=True)
 else:
     st.info("Nenhum lançamento variável para o período selecionado.")
