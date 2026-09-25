@@ -1,12 +1,9 @@
 import streamlit as st
 import pandas as pd
-import urllib.parse
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
+import requests
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURAÇÃO DE INTERFACE E ENGENHARIA VISUAL
+# 1. CONFIGURAÇÃO DE INTERFACE
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Portal BPO Financeiro | Grupo Fiño House",
@@ -34,7 +31,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. BANCO DE DADOS DE UNIDADES E CONFIGURAÇÕES
+# 2. BANCO DE DADOS DE UNIDADES
 # -----------------------------------------------------------------------------
 CLIENT_DATABASE = {
     "cliente_tere": {
@@ -48,7 +45,7 @@ CLIENT_DATABASE = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. CONVERSORES E PARSERS DE DADOS MATEMÁTICOS
+# 3. TRATAMENTO E CONVERSÃO DE DADOS
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if pd.isna(val): 
@@ -87,56 +84,58 @@ def match_col(df, candidates):
     return None
 
 # -----------------------------------------------------------------------------
-# 4. ENGINE DE CARREGAMENTO INTELIGENTE (API + FALLBACK TRANSPARENTE)
+# 4. DATA ENGINE COM LEITURA SEGURA
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=10, show_spinner=False)
-def load_operational_data_engine(sheet_id):
-    # 1. Tentativa via Google Sheets API (gspread) se credenciais existirem nos Secrets
-    if "gcp_service_account" in st.secrets:
+@st.cache_data(ttl=15, show_spinner=False)
+def fetch_tab_via_api(sheet_id, sheet_name, api_key):
+    if api_key:
+        url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{requests.utils.quote(sheet_name)}?key={api_key}"
         try:
-            import gspread
-            from google.oauth2.service_account import Credentials
-            scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
-            client = gspread.authorize(creds)
-            sh = client.open_by_key(sheet_id)
-            
-            df_ext = pd.DataFrame(sh.worksheet("EXTRATO BANCÁRIO").get_all_records())
-            df_var = pd.DataFrame(sh.worksheet("CONTAS VARIÁVEIS").get_all_records())
-            df_fix = pd.DataFrame(sh.worksheet("CONTAS FIXAS").get_all_records())
-            
-            return df_ext, df_var, df_fix, None
-        except Exception as e_api:
-            pass
-
-    # 2. Fallback via Leitura Direta de URL com Tratamento de Erro Explícito
-    def fetch_url_tab(sheet_id, tab_names):
-        for tab in tab_names:
-            encoded_tab = urllib.parse.quote(tab)
-            url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&sheet={encoded_tab}"
-            try:
-                df = pd.read_csv(url)
-                if not df.empty and len(df.columns) >= 2:
+            res = requests.get(url, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                values = data.get('values', [])
+                if len(values) > 1:
+                    df = pd.DataFrame(values[1:], columns=values[0])
                     df.columns = [str(c).strip() for c in df.columns]
                     return df, None
-            except Exception as e:
-                continue
-        return pd.DataFrame(), f"Aba inacessível ({tab_names})"
+        except Exception:
+            pass
+    
+    # Fallback leitor direto
+    url_csv = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&sheet={requests.utils.quote(sheet_name)}"
+    try:
+        df_csv = pd.read_csv(url_csv)
+        if not df_csv.empty and len(df_csv.columns) >= 2:
+            df_csv.columns = [str(c).strip() for c in df_csv.columns]
+            return df_csv, None
+    except Exception:
+        pass
 
-    df_ext, err_e = fetch_url_tab(sheet_id, ["EXTRATO BANCÁRIO", "EXTRATO BANCARIO", "EXTRATO"])
-    df_var, err_v = fetch_url_tab(sheet_id, ["CONTAS VARIÁVEIS", "CONTAS VARIAVEIS", "VARIAVEIS"])
-    df_fix, err_f = fetch_url_tab(sheet_id, ["CONTAS FIXAS", "FIXAS"])
+    return pd.DataFrame(), f"Aba '{sheet_name}' inacessível."
 
-    if df_ext.empty and df_var.empty and df_fix.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), "A nuvem não conseguiu acessar a planilha. Verifique as permissões de compartilhamento no Google Drive."
+def load_all_operational_data(sheet_id):
+    # Puxa a chave oculta dos secrets
+    api_key = st.secrets.get("GOOGLE_API_KEY", "")
+    
+    df_ext, _ = fetch_tab_via_api(sheet_id, "EXTRATO BANCÁRIO", api_key)
+    if df_ext.empty:
+        df_ext, _ = fetch_tab_via_api(sheet_id, "EXTRATO BANCARIO", api_key)
 
-    return df_ext, df_var, df_fix, None
+    df_var, _ = fetch_tab_via_api(sheet_id, "CONTAS VARIÁVEIS", api_key)
+    if df_var.empty:
+        df_var, _ = fetch_tab_via_api(sheet_id, "CONTAS VARIAVEIS", api_key)
+
+    df_fix, _ = fetch_tab_via_api(sheet_id, "CONTAS FIXAS", api_key)
+
+    is_empty = df_ext.empty and df_var.empty and df_fix.empty
+    return df_ext, df_var, df_fix, is_empty
 
 # -----------------------------------------------------------------------------
-# 5. CONTROLE LATERAL (SIDEBAR)
+# 5. SIDEBAR E NAVEGAÇÃO
 # -----------------------------------------------------------------------------
 st.sidebar.title("🏢 Portal BPO Financeiro")
-st.sidebar.caption("Engenharia de TI — Alex (CTO)")
+st.sidebar.caption("Alex — Diretor de Tecnologia (CTO)")
 st.sidebar.markdown("---")
 
 cliente_key = st.sidebar.selectbox(
@@ -154,25 +153,23 @@ periodo_selecionado = st.sidebar.selectbox(
 )
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🔄 Forçar Sincronização em Tempo Real"):
+if st.sidebar.button("🔄 Sincronizar com Google Sheets"):
     st.cache_data.clear()
     st.rerun()
 
-# Execute Data Engine
-df_extrato, df_var, df_fixas, err_msg = load_operational_data_engine(cliente_info['sheet_id'])
+# Execute Engine
+df_extrato, df_var, df_fixas, is_empty = load_all_operational_data(cliente_info['sheet_id'])
 
-if err_msg:
-    st.error(f"⚠️ **Falha na Leitura Automática:** {err_msg}")
-    st.info("💡 **Como Resolver:** Abra a planilha no Google Sheets, clique em **Compartilhar** no canto superior direito e marque como **'Qualquer pessoa com o link pode ver'**.")
+if is_empty:
+    st.error("🚨 **Aviso do Alex (CTO): Não foi possível conectar ao Google Sheets.**")
+    st.info("💡 Certifique-se de que a chave `GOOGLE_API_KEY` foi configurada nos Secrets do Streamlit Cloud.")
     st.stop()
 
 target_month = 8 if "Agosto" in periodo_selecionado else (9 if "Setembro" in periodo_selecionado else None)
 
 # -----------------------------------------------------------------------------
-# 6. ENGINE DE ANÁLISE COMERCIAL & FINANCEIRA (MARCOS / GUSTAVO)
+# 6. CÁLCULOS E DASHBOARD
 # -----------------------------------------------------------------------------
-
-# Processing Extrato
 receita_real, saidas_extrato = 0.0, 0.0
 df_extrato_f = pd.DataFrame()
 
@@ -182,7 +179,6 @@ if not df_extrato.empty:
     
     if col_dt_e and col_val_e:
         dt_e_series = parse_dates_robust(df_extrato[col_dt_e])
-        df_extrato['DT_PARSED'] = dt_e_series
         df_extrato['VALOR_CLEAN'] = df_extrato[col_val_e].apply(clean_currency)
         
         if target_month:
@@ -194,7 +190,6 @@ if not df_extrato.empty:
             receita_real = df_extrato_f[df_extrato_f['VALOR_CLEAN'] > 0]['VALOR_CLEAN'].sum()
             saidas_extrato = df_extrato_f[df_extrato_f['VALOR_CLEAN'] < 0]['VALOR_CLEAN'].sum()
 
-# Processing Contas Variáveis
 custo_var_pago, var_vencido = 0.0, 0.0
 df_var_f = pd.DataFrame()
 
@@ -206,7 +201,6 @@ if not df_var.empty:
     s_venc_v = parse_dates_robust(df_var[col_venc_v]) if col_venc_v else pd.Series(index=df_var.index, dtype='datetime64[ns]')
     
     dt_final_v = s_pag_v.fillna(s_venc_v)
-    df_var['DT_PARSED'] = dt_final_v
 
     if target_month:
         df_var_f = df_var[(dt_final_v.dt.month == target_month) & (dt_final_v.dt.year == 2026)].copy()
@@ -223,7 +217,6 @@ if not df_var.empty:
                 custo_var_pago = df_var_f[st_upper_v == 'PAGO']['VALOR_CLEAN'].sum()
                 var_vencido = df_var_f[st_upper_v.isin(['VENCIDO', 'PENDENTE'])]['VALOR_CLEAN'].sum()
 
-# Processing Contas Fixas
 custo_fixo_pago, fixo_vencido = 0.0, 0.0
 df_fixas_f = pd.DataFrame()
 
@@ -235,7 +228,6 @@ if not df_fixas.empty:
     s_venc_f = parse_dates_robust(df_fixas[col_venc_f]) if col_venc_f else pd.Series(index=df_fixas.index, dtype='datetime64[ns]')
     
     dt_final_f = s_pag_f.fillna(s_venc_f)
-    df_fixas['DT_PARSED'] = dt_final_f
 
     if target_month:
         df_fixas_f = df_fixas[(dt_final_f.dt.month == target_month) & (dt_final_f.dt.year == 2026)].copy()
@@ -255,124 +247,19 @@ if not df_fixas.empty:
 resultado_caixa = receita_real + saidas_extrato
 total_pendente = var_vencido + fixo_vencido
 
-# -----------------------------------------------------------------------------
-# 7. EXIBIÇÃO DO DASHBOARD E PAINEL EXECUTIVO
-# -----------------------------------------------------------------------------
+# EXIBIÇÃO NO STREAMLIT
 st.title(f"📊 Painel Executivo BPO Financeiro — {cliente_info['nome']}")
-st.caption(f"Filtro Selecionado: **{periodo_selecionado}** | Sincronizado com o Google Sheets")
+st.caption(f"Filtro Ativo: **{periodo_selecionado}**")
 
-# CARDS DE METRICAS PRINCIPAIS
 kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 
 with kpi1:
-    st.markdown(f'<div class="kpi-card"><div class="kpi-title">Entradas (Extrato)</div><div class="kpi-value">{format_brl(receita_real)}</div><div class="kpi-sub">Total Recebido</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi-card"><div class="kpi-title">Entradas (Extrato)</div><div class="kpi-value">{format_brl(receita_real)}</div></div>', unsafe_allow_html=True)
 with kpi2:
-    st.markdown(f'<div class="kpi-card" style="border-left-color: #EF4444;"><div class="kpi-title">Saídas Variáveis</div><div class="kpi-value">{format_brl(custo_var_pago)}</div><div class="kpi-sub">Insumos & Fornecedores</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi-card" style="border-left-color: #EF4444;"><div class="kpi-title">Saídas Variáveis</div><div class="kpi-value">{format_brl(custo_var_pago)}</div></div>', unsafe_allow_html=True)
 with kpi3:
-    st.markdown(f'<div class="kpi-card" style="border-left-color: #F59E0B;"><div class="kpi-title">Saídas Fixas</div><div class="kpi-value">{format_brl(custo_fixo_pago)}</div><div class="kpi-sub">Estrutura Operacional</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi-card" style="border-left-color: #F59E0B;"><div class="kpi-title">Saídas Fixas</div><div class="kpi-value">{format_brl(custo_fixo_pago)}</div></div>', unsafe_allow_html=True)
 with kpi4:
-    st.markdown(f'<div class="kpi-card" style="border-left-color: {"#10B981" if resultado_caixa >= 0 else "#EF4444"};"><div class="kpi-title">Resultado de Caixa</div><div class="kpi-value">{format_brl(resultado_caixa)}</div><div class="kpi-sub">Geração Liquida</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi-card" style="border-left-color: {"#10B981" if resultado_caixa >= 0 else "#EF4444"};"><div class="kpi-title">Resultado de Caixa</div><div class="kpi-value">{format_brl(resultado_caixa)}</div></div>', unsafe_allow_html=True)
 with kpi5:
-    st.markdown(f'<div class="kpi-card" style="border-left-color: #DC2626;"><div class="kpi-title">Contas Pendentes</div><div class="kpi-value">{format_brl(total_pendente)}</div><div class="kpi-sub">A Vencer / Vencidas</div></div>', unsafe_allow_html=True)
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# -----------------------------------------------------------------------------
-# 8. AGENDA FINANCEIRA VIGENTE (SEGUNDA A DOMINGO DA SEMANA) — CAMILA
-# -----------------------------------------------------------------------------
-st.subheader("📅 Agenda Financeira Vigente — Previsão Semanal (Segunda a Domingo)")
-
-today = datetime.today()
-start_week = today - timedelta(days=today.weekday()) # Segunda-feira da semana
-end_week = start_week + timedelta(days=6)             # Domingo da semana
-
-ag_col1, ag_col2 = st.columns([4, 6])
-
-with ag_col1:
-    modo_agenda = st.radio("Filtro Temporal da Agenda:", options=["Semana Vigente (Seg a Dom)", "Período Personalizado"], horizontal=True)
-
-with ag_col2:
-    if modo_agenda == "Período Personalizado":
-        dates_selected = st.date_input("Selecione o Intervalo de Vencimento:", value=(start_week.date(), end_week.date()))
-    else:
-        st.info(f"📆 **Semana Vigente:** Segunda ({start_week.strftime('%d/%m/%Y')}) até Domingo ({end_week.strftime('%d/%m/%Y')})")
-
-col_st_v_all = match_col(df_var, ['Status'])
-col_st_f_all = match_col(df_fixas, ['Status'])
-
-df_ag_v = df_var[df_var[col_st_v_all].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])].copy() if not df_var.empty and col_st_v_all else pd.DataFrame()
-df_ag_f = df_fixas[df_fixas[col_st_f_all].astype(str).str.strip().str.upper().isin(['VENCIDO', 'PENDENTE'])].copy() if not df_fixas.empty and col_st_f_all else pd.DataFrame()
-
-df_ag_all = pd.concat([df_ag_v, df_ag_f], ignore_index=True)
-
-col_venc_all = match_col(df_ag_all, ['Vencimento', 'Data de Pagamento'])
-col_stat_all = match_col(df_ag_all, ['Status'])
-
-if not df_ag_all.empty and col_venc_all:
-    df_ag_all['VENC_DT'] = parse_dates_robust(df_ag_all[col_venc_all])
-    cond_venc = (df_ag_all[col_stat_all].astype(str).str.strip().str.upper() == 'VENCIDO') if col_stat_all else False
-    
-    if modo_agenda == "Semana Vigente (Seg a Dom)":
-        cond_dt = (df_ag_all['VENC_DT'] >= pd.to_datetime(start_week.date())) & (df_ag_all['VENC_DT'] <= pd.to_datetime(end_week.date()))
-    else:
-        if isinstance(dates_selected, tuple) and len(dates_selected) == 2:
-            cond_dt = (df_ag_all['VENC_DT'] >= pd.to_datetime(dates_selected[0])) & (df_ag_all['VENC_DT'] <= pd.to_datetime(dates_selected[1]))
-        else:
-            cond_dt = (df_ag_all['VENC_DT'] >= pd.to_datetime(start_week.date())) & (df_ag_all['VENC_DT'] <= pd.to_datetime(end_week.date()))
-
-    df_ag_filt = df_ag_all[cond_venc | cond_dt].copy()
-    col_val_ag = match_col(df_ag_filt, ['Valor', 'Valor (R$)'])
-    
-    if not df_ag_filt.empty and col_val_ag:
-        df_ag_filt['Valor Formatado'] = df_ag_filt[col_val_ag].apply(lambda x: format_brl(clean_currency(x)))
-        show_cols = [c for c in ['Vencimento', 'Fornecedor', 'Descrição', 'Categoria', 'Valor Formatado', 'Status'] if c in df_ag_filt.columns]
-        st.dataframe(df_ag_filt[show_cols].sort_values(by='Vencimento'), use_container_width=True)
-        
-        tot_ag = df_ag_filt[col_val_ag].apply(clean_currency).sum()
-        st.error(f"💸 **Compromissos Financeiros na Semana Vigente:** {format_brl(tot_ag)}")
-    else:
-        st.success("✅ **Nenhum compromisso pendente registrado para a semana vigente.**")
-else:
-    st.success("✅ **Sem pendências financeiras registradas.**")
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# -----------------------------------------------------------------------------
-# 9. DEMONSTRATIVO VISUAL DE FLUXO E ESTRUTURA DE CUSTOS
-# -----------------------------------------------------------------------------
-st.subheader("📈 Demonstrativo Gerencial do Período")
-g1, g2 = st.columns([6, 4])
-
-with g1:
-    fig_bar = go.Figure(go.Bar(
-        x=['Entradas', 'Saídas Extrato', 'Variáveis Pagas', 'Fixas Pagas', 'Resultado Caixa'],
-        y=[receita_real, abs(saidas_extrato), custo_var_pago, custo_fixo_pago, resultado_caixa],
-        marker_color=['#1E3A8A', '#DC2626', '#EF4444', '#F59E0B', '#10B981' if resultado_caixa >= 0 else '#DC2626'],
-        text=[format_brl(v) for v in [receita_real, abs(saidas_extrato), custo_var_pago, custo_fixo_pago, resultado_caixa]],
-        textposition='auto'
-    ))
-    fig_bar.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=20), title="Visão Comparativa de Entradas vs Saídas (R$)")
-    st.plotly_chart(fig_bar, use_container_width=True)
-
-with g2:
-    if (custo_var_pago + custo_fixo_pago) > 0:
-        fig_pie = px.pie(
-            names=['Contas Variáveis', 'Contas Fixas'],
-            values=[custo_var_pago, custo_fixo_pago],
-            color_discrete_sequence=['#EF4444', '#F59E0B'],
-            hole=0.5,
-            title="Distribuição de Saídas Pagas"
-        )
-        fig_pie.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=20))
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-st.markdown("---")
-st.subheader("📋 Tabela Operacional de Lançamentos do Período")
-if not df_var_f.empty:
-    df_var_disp = df_var_f.copy()
-    c_v = match_col(df_var_disp, ['Valor', 'Valor (R$)'])
-    if c_v:
-        df_var_disp['Valor (R$)'] = df_var_disp[c_v].apply(lambda x: format_brl(clean_currency(x)))
-    st.dataframe(df_var_disp, use_container_width=True)
-else:
-    st.info("Nenhum lançamento para a competência selecionada.")
+    st.markdown(f'<div class="kpi-card" style="border-left-color: #DC2626;"><div class="kpi-title">Contas Pendentes</div><div class="kpi-value">{format_brl(total_pendente)}</div></div>', unsafe_allow_html=True)
