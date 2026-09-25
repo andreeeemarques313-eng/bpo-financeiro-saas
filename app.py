@@ -124,7 +124,7 @@ CLIENTES = {
     "Tere": {
         "nome": "Fiño House - Teresópolis (RJ)", 
         "id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw",
-        "gid_variaveis": "557165039"  # <--- SEU GID FIXO AQUI (DEIXA 100% AUTOMÁTICO)
+        "gid_variaveis": "546478773"  # <--- SEU GID FIXO AQUI (DEIXA 100% AUTOMÁTICO)
     },
     "OB": {
         "nome": "Fiño House - Minas Gerais (OB)", 
