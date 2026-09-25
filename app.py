@@ -317,10 +317,10 @@ df_var = dados["variaveis"]
 df_fix = dados["fixas"]
 
 # -----------------------------------------------------------------------------
-# 7. PROCESSAMENTO FINANCEIRO COM FALLBACK POR POSIÇÃO (EXTRATO E VARIÁVEIS)
+# 7. PROCESSAMENTO FINANCEIRO COM CAIXA GERENCIAL (RECEITAS − SAÍDAS PAGAS)
 # -----------------------------------------------------------------------------
 
-receita_extrato, saidas_extrato = 0.0, 0.0
+receita_extrato, saidas_extrato_bruto = 0.0, 0.0
 if not df_ext.empty:
     c_dt_e = match_col(df_ext, ['DATA', 'DATA ', 'DATA DO LANÇAMENTO', 'DATA_LANCAMENTO', 'DATA DO LANÇAMENTO '], fallback_idx=0)
     c_val_e = match_col(df_ext, ['VALOR', 'VALOR (R$)', 'BANCO', 'VALOR LÍQUIDO', 'VALOR LIQUIDO'], fallback_idx=1)
@@ -329,7 +329,6 @@ if not df_ext.empty:
         df_ext['VALOR_NUM'] = df_ext[c_val_e].apply(clean_currency)
         df_ext['DT_S'] = dt_s
         
-        # Filtro de mês adaptável
         mes_ext_final = dt_s.dt.month
         if target_month:
             cond_mes = (mes_ext_final == target_month)
@@ -339,7 +338,7 @@ if not df_ext.empty:
         df_ext_filtro = df_ext[cond_mes].copy()
         if not df_ext_filtro.empty:
             receita_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] > 0]['VALOR_NUM'].sum()
-            saidas_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] < 0]['VALOR_NUM'].sum()
+            saidas_extrato_bruto = df_ext_filtro[df_ext_filtro['VALOR_NUM'] < 0]['VALOR_NUM'].sum()
 
 def process_contas_competencia(df):
     if df.empty: return 0.0, 0.0, 0.0, pd.DataFrame()
@@ -395,7 +394,10 @@ def process_contas_competencia(df):
 var_pago, var_venc, var_pend, df_var_f = process_contas_competencia(df_var)
 fix_pago, fix_venc, fix_pend, df_fix_f = process_contas_competencia(df_fix)
 
-saldo_caixa_real = receita_extrato + saidas_extrato
+# CAIXA GERENCIAL: Receitas do Extrato menos todas as saídas pagas do período (Variáveis + Fixas)
+total_saidas_pagas = var_pago + fix_pago
+saldo_caixa_real = receita_extrato - total_saidas_pagas
+
 total_vencido_mes = var_venc + fix_venc
 total_a_vencer_mes = var_pend + fix_pend
 total_pendente_mes = total_vencido_mes + total_a_vencer_mes
@@ -422,7 +424,7 @@ with c2: st.markdown(f'<div class="kpi-card" style="border-left-color: #EA3D07;"
 with c3: st.markdown(f'<div class="kpi-card" style="border-left-color: #555657;"><div class="kpi-title">Fixas Pagas</div><div class="kpi-value">{format_brl(fix_pago)}</div><div class="kpi-sub">Estrutura Operacional</div></div>', unsafe_allow_html=True)
 with c4: 
     cor_caixa = "#10B981" if saldo_caixa_real >= 0 else "#EA3D07"
-    st.markdown(f'<div class="kpi-card" style="border-left-color: {cor_caixa};"><div class="kpi-title">Resultado de Caixa</div><div class="kpi-value">{format_brl(saldo_caixa_real)}</div><div class="kpi-sub">Entradas − Saídas Extrato</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi-card" style="border-left-color: {cor_caixa};"><div class="kpi-title">Resultado de Caixa</div><div class="kpi-value">{format_brl(saldo_caixa_real)}</div><div class="kpi-sub">Entradas − Saídas Pagas</div></div>', unsafe_allow_html=True)
 with c5: 
     sub_pend = f"{format_brl(total_vencido_mes)} Vencidas | {format_brl(total_a_vencer_mes)} A Vencer" if total_pendente_mes > 0 else "Nenhuma Pendência"
     st.markdown(f'<div class="kpi-card" style="border-left-color: #1B1C1D;"><div class="kpi-title">Contas Pendentes</div><div class="kpi-value">{format_brl(total_pendente_mes)}</div><div class="kpi-sub">{sub_pend}</div></div>', unsafe_allow_html=True)
@@ -504,9 +506,9 @@ g1, g2 = st.columns([6, 4])
 with g1:
     fig_bar = go.Figure(go.Bar(
         x=['Entradas', 'Saídas', 'Variáveis Pagas', 'Fixas Pagas', 'Caixa'],
-        y=[receita_extrato, abs(saidas_extrato), var_pago, fix_pago, saldo_caixa_real],
+        y=[receita_extrato, abs(saidas_extrato_bruto), var_pago, fix_pago, saldo_caixa_real],
         marker_color=['#1B1C1D', '#555657', '#EA3D07', '#555657', cor_caixa],
-        text=[format_brl(v) for v in [receita_extrato, abs(saidas_extrato), var_pago, fix_pago, saldo_caixa_real]],
+        text=[format_brl(v) for v in [receita_extrato, abs(saidas_extrato_bruto), var_pago, fix_pago, saldo_caixa_real]],
         textposition='auto', textfont=dict(color='#FFFFFF', size=11, family='Poppins')
     ))
     fig_bar.update_layout(height=340, margin=dict(l=10, r=10, t=25, b=25), title=dict(text="Fluxo Financeiro (R$)", font=dict(color="#1B1C1D", family="Poppins", size=14)), font=dict(family="Poppins", color="#1B1C1D"), plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF")
@@ -515,5 +517,6 @@ with g1:
 with g2:
     if (var_pago + fix_pago) > 0:
         fig_pie = px.pie(names=['Contas Variáveis', 'Contas Fixas'], values=[var_pago, fix_pago], color_discrete_sequence=['#EA3D07', '#1B1C1D'], hole=0.45, title="Distribuição de Saídas")
-        fig_pie.update_layout(height=340, margin=dict(l=10, r=10, t=25, b=25), title=dict(font=dict(color="#1B1C1D", family="Poppins", size=14)), font=dict(family="Poppins", color="#1B1C1D"), paper_bgcolor="#FFFFFF", legend=dict(font=dict(color="#1B1C1D", family="Poppins")))
+        fig_pie.update_layout(height=340, margin=dict(l=10, r=10, t=25, b=25), title=dict(font=dict(color="#1B1C1D", family="Poppins", size=14)), font=dict(family="Poppins", color="#1B1C1D"), paper_bgcolor="#FFFFFF", legend=dict(font=dict(color="#1B1C1D", family="Poppins"))
+        )
         st.plotly_chart(fig_pie, use_container_width=True)
