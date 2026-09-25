@@ -17,7 +17,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilização CSS responsiva sem corte por reticências
 st.markdown("""
     <style>
     .main { background-color: #f4f6f9; }
@@ -39,7 +38,7 @@ st.markdown("""
         margin-bottom: 6px;
     }
     .kpi-value { 
-        font-size: clamp(15px, 1.2vw, 21px) !important; 
+        font-size: clamp(15px, 1.25vw, 22px) !important; 
         color: #172B4D; 
         font-weight: 800; 
         white-space: nowrap !important;
@@ -67,7 +66,7 @@ CLIENTES = {
 }
 
 # -----------------------------------------------------------------------------
-# 2. CONVERSÃO MONETÁRIA E PARSERS DE DADOS
+# 2. CONVERSÃO MONETÁRIA E PARSERS ROBUSTOS
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if val is None or pd.isna(val):
@@ -112,7 +111,7 @@ def match_col(df, candidates):
     return None
 
 # -----------------------------------------------------------------------------
-# 3. VALIDAÇÃO ESTRUTURAL DE ESQUEMA DAS TABELAS
+# 3. VALIDAÇÃO DE ESQUEMA DAS TABELAS
 # -----------------------------------------------------------------------------
 def is_valid_extrato(df):
     if df.empty or len(df.columns) < 2: return False
@@ -120,131 +119,79 @@ def is_valid_extrato(df):
     if 'INDICADOR' in cols: return False
     return any('DATA' in c for c in cols) and (any('VALOR' in c for c in cols) or any('BANCO' in c for c in cols))
 
-def is_valid_contas_var(df):
+def is_valid_contas(df):
     if df.empty or len(df.columns) < 3: return False
     cols = [str(c).strip().upper() for c in df.columns]
     if 'INDICADOR' in cols: return False
-    has_venc = any('VENCIMENTO' in c for c in cols) or any('PAGAMENTO' in c for c in cols)
+    has_date = any('VENCIMENTO' in c or 'PAGAMENTO' in c or 'COMPETÊNCIA' in c or 'COMPETENCIA' in c for c in cols)
     has_val = any('VALOR' in c for c in cols)
-    return has_venc and has_val
-
-def is_valid_contas_fix(df):
-    if df.empty or len(df.columns) < 3: return False
-    cols = [str(c).strip().upper() for c in df.columns]
-    if 'INDICADOR' in cols: return False
-    has_venc = any('VENCIMENTO' in c for c in cols) or any('PAGAMENTO' in c for c in cols)
-    has_val = any('VALOR' in c for c in cols)
-    return has_venc and has_val
+    return has_date and has_val
 
 # -----------------------------------------------------------------------------
-# 4. MOTOR AVANÇADO DE EXTRAÇÃO POR GID E MULTI-VARREDURA
+# 4. MOTOR DE EXTRAÇÃO COM PROTEÇÃO CONTRA LINHAS COM ERRO (on_bad_lines)
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=10, show_spinner=False)
-def discover_all_gids(sheet_id):
-    """Extrai os GIDs de todas as abas tratando tags internas <span> e estruturas JSON."""
-    gids = {}
-    for u in [
-        f"https://docs.google.com/spreadsheets/d/{sheet_id}/htmlview",
-        f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
-    ]:
-        try:
-            r = requests.get(u, timeout=6, headers={'User-Agent': 'Mozilla/5.0'})
-            if r.status_code == 200:
-                # 1. Busca por tags de botão de aba com limpeza interna de HTML
-                for gid, content in re.findall(r'id=["\']sheet-button-([0-9]+)["\'][^>]*>(.*?)</li>', r.text, re.DOTALL):
-                    title_clean = re.sub(r'<[^>]+>', '', content).strip()
-                    if title_clean:
-                        gids[title_clean.upper()] = gid
-                # 2. Busca por JSON incorporado
-                for m in re.finditer(r'["\']?sheetId["\']?\s*:\s*([0-9]+)[^}]+?["\']?title["\']?\s*:\s*["\']([^"\']+)["\']', r.text):
-                    gids[m.group(2).strip().upper()] = m.group(1).strip()
-                for m in re.finditer(r'["\']?title["\']?\s*:\s*["\']([^"\']+)["\'][^}]+?["\']?sheetId["\']?\s*:\s*([0-9]+)', r.text):
-                    gids[m.group(1).strip().upper()] = m.group(2).strip()
-                if len(gids) >= 3:
-                    break
-        except Exception:
-            continue
-    return gids
+def read_csv_safe(url):
+    """Lê CSV do Google Sheets com proteção contra quebras de linha e separadores anômalos."""
+    try:
+        df = pd.read_csv(url, on_bad_lines='skip', encoding='utf-8')
+        if not df.empty and len(df.columns) >= 2:
+            df.columns = [str(c).strip() for c in df.columns]
+            return df
+    except Exception:
+        pass
+    try:
+        df = pd.read_csv(url, on_bad_lines='skip', sep=None, engine='python', encoding='utf-8')
+        if not df.empty and len(df.columns) >= 2:
+            df.columns = [str(c).strip() for c in df.columns]
+            return df
+    except Exception:
+        pass
+    return pd.DataFrame()
 
 @st.cache_data(ttl=10, show_spinner=False)
-def download_tab_guaranteed(sheet_id, target_kind, candidate_names, discovered_gids, manual_gid=""):
-    validator = is_valid_extrato if target_kind == "extrato" else (is_valid_contas_var if target_kind == "variaveis" else is_valid_contas_fix)
+def download_tab_robust(sheet_id, target_kind, candidate_names, manual_gid=""):
+    validator = is_valid_extrato if target_kind == "extrato" else is_valid_contas
 
-    # Prioridade 0: GID Manual fornecido na barra lateral
-    if manual_gid and manual_gid.strip().isdigit():
-        url_manual = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={manual_gid.strip()}"
-        try:
-            df = pd.read_csv(url_manual)
+    # 1. Se o usuário informou o GID manualmente na barra lateral
+    if manual_gid and str(manual_gid).strip().isdigit():
+        gid_clean = str(manual_gid).strip()
+        for u in [
+            f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid_clean}",
+            f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid_clean}"
+        ]:
+            df = read_csv_safe(u)
             if validator(df):
-                df.columns = [str(c).strip() for c in df.columns]
-                return df, f"GID Manual ({manual_gid.strip()})"
-        except Exception:
-            pass
+                return df, f"GID Manual ({gid_clean})"
 
-    # Prioridade 1: GIDs mapeados na inspeção HTML/JSON
-    for title_upper, gid in discovered_gids.items():
-        match = False
-        if target_kind == "extrato" and "EXTRATO" in title_upper: match = True
-        elif target_kind == "variaveis" and ("VARIA" in title_upper or "VARIÁ" in title_upper): match = True
-        elif target_kind == "fixas" and "FIXA" in title_upper: match = True
-
-        if match:
-            url_gid = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid}"
-            try:
-                df = pd.read_csv(url_gid)
-                if validator(df):
-                    df.columns = [str(c).strip() for c in df.columns]
-                    return df, f"GID Automático ({gid})"
-            except Exception:
-                pass
-
-    # Prioridade 2: Variações textuais completas (com e sem espaços finais)
+    # 2. Busca pelas variações nominais no GViz e Export padrão
     for name in candidate_names:
         for enc in [urllib.parse.quote(name), urllib.parse.quote_plus(name), name]:
-            for url_pattern in [
+            for u in [
                 f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={enc}",
                 f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&sheet={enc}"
             ]:
-                try:
-                    df = pd.read_csv(url_pattern)
-                    if validator(df):
-                        df.columns = [str(c).strip() for c in df.columns]
-                        return df, f"Aba ('{name.strip()}')"
-                except Exception:
-                    continue
-
-    # Prioridade 3: Varredura sequencial direta de GIDs comuns (0 a 15)
-    for test_gid in range(0, 16):
-        url_scan = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={test_gid}"
-        try:
-            df = pd.read_csv(url_scan)
-            if validator(df):
-                df.columns = [str(c).strip() for c in df.columns]
-                return df, f"Varredura GID ({test_gid})"
-        except Exception:
-            continue
+                df = read_csv_safe(u)
+                if validator(df):
+                    return df, f"Aba ('{name.strip()}')"
 
     return pd.DataFrame(), None
 
 def load_data_pipeline(sheet_id, manual_var_gid=""):
-    gids = discover_all_gids(sheet_id)
-
     ext_names = [
-        "EXTRATO BANCARIO", "EXTRATO", "EXTRATO BANCÁRIO", "Extrato Bancario", "EXTRATO BANCARIO "
+        "EXTRATO BANCARIO", "EXTRATO", "EXTRATO BANCÁRIO", "Extrato Bancario"
     ]
-    # Lista ampliada com espaços no final para contornar qualquer formatação no Sheets
     var_names = [
-        "CONTAS VARIAVEIS", "CONTAS VARIAVEIS ", "CONTAS VARIAVEIS  ", " CONTAS VARIAVEIS",
-        "CONTAS VARIÁVEIS", "CONTAS VARIÁVEIS ", "VARIAVEIS", "VARIÁVEIS", "VARIAVEIS ",
-        "Contas Variaveis", "Contas Variáveis", "Contas Variaveis "
+        "CONTAS VARIAVEIS", "CONTAS VARIAVEIS ", "CONTAS VARIÁVEIS", "CONTAS VARIÁVEIS ",
+        "VARIAVEIS", "VARIÁVEIS", "Contas Variaveis", "Contas Variáveis"
     ]
     fix_names = [
-        "CONTAS FIXAS", "CONTAS FIXAS ", "FIXAS", "Contas Fixas", "Contas Fixas "
+        "CONTAS FIXAS", "CONTAS FIXAS ", "FIXAS", "Contas Fixas"
     ]
 
-    df_ext, m_e = download_tab_guaranteed(sheet_id, "extrato", ext_names, gids)
-    df_var, m_v = download_tab_guaranteed(sheet_id, "variaveis", var_names, gids, manual_var_gid)
-    df_fix, m_f = download_tab_guaranteed(sheet_id, "fixas", fix_names, gids)
+    df_ext, m_e = download_tab_robust(sheet_id, "extrato", ext_names)
+    df_var, m_v = download_tab_robust(sheet_id, "variaveis", var_names, manual_var_gid)
+    df_fix, m_f = download_tab_robust(sheet_id, "fixas", fix_names)
 
     return {
         "extrato": df_ext,
@@ -258,20 +205,21 @@ def load_data_pipeline(sheet_id, manual_var_gid=""):
     }
 
 # -----------------------------------------------------------------------------
-# 5. CONTROLES LATERAIS E MONITORAMENTO
+# 5. CONTROLES LATERAIS E STATUS
 # -----------------------------------------------------------------------------
 st.sidebar.title("🏢 Painel BPO Financeiro")
 st.sidebar.caption("Alex — Diretor de Tecnologia (CTO)")
 st.sidebar.markdown("---")
 
 unidade_chave = st.sidebar.selectbox("Unidade:", list(CLIENTES.keys()), format_func=lambda x: CLIENTES[x]["nome"])
-periodo_filtro = st.sidebar.selectbox("Competência:", ["Agosto/2026", "Setembro/2026", "CONSOLIDADO DO ANO (2026)"])
+periodo_filtro = st.sidebar.selectbox("Competência:", ["Setembro/2026", "Agosto/2026", "CONSOLIDADO DO ANO (2026)"])
 
-# Campo opcional para garantir conexão manual se desejado
+# Campo para o GID manual caso necessário
 manual_var_gid = st.sidebar.text_input(
-    "GID Contas Variáveis (Opcional):", 
-    value="", 
-    help="Se a aba não for localizada automaticamente, insira o número do gid presente na URL do navegador quando estiver na aba."
+    "🔑 GID Contas Variáveis (Opcional):",
+    value="",
+    placeholder="Ex: 987654321",
+    help="Olhe no navegador quando estiver na aba CONTAS VARIAVEIS e copie o número após '#gid='"
 )
 
 if st.sidebar.button("🔄 Sincronizar Base de Dados"):
@@ -290,14 +238,14 @@ st.sidebar.markdown(f"{'🟢' if st_ext_ok else '🔴'} **Extrato:** {st_ext_row
 st.sidebar.markdown(f"{'🟢' if st_var_ok else '🔴'} **Variáveis:** {st_var_rows} reg ({st_var_mod or 'Não localizado'})")
 st.sidebar.markdown(f"{'🟢' if st_fix_ok else '🔴'} **Fixas:** {st_fix_rows} reg ({st_fix_mod or 'Não localizado'})")
 
-target_month = 8 if "Agosto" in periodo_filtro else (9 if "Setembro" in periodo_filtro else None)
+target_month = 9 if "Setembro" in periodo_filtro else (8 if "Agosto" in periodo_filtro else None)
 
 df_ext = dados["extrato"]
 df_var = dados["variaveis"]
 df_fix = dados["fixas"]
 
 # -----------------------------------------------------------------------------
-# 6. REGRAS 1 & 2: EXTRATO (ENTRADAS) E CONTAS (SAÍDAS DA COMPETÊNCIA)
+# 6. REGRAS DE CÁLCULO FINANCEIRO (COMPETÊNCIA)
 # -----------------------------------------------------------------------------
 
 # REGRA 1: ENTRADAS EXCLUSIVAS DA ABA EXTRATO BANCÁRIO
@@ -317,7 +265,7 @@ if not df_ext.empty:
             receita_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] > 0]['VALOR_NUM'].sum()
             saidas_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] < 0]['VALOR_NUM'].sum()
 
-# REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DA COMPETÊNCIA
+# REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DA COMPETÊNCIA ATIVA
 def process_contas_competencia(df):
     if df.empty: return 0.0, 0.0, 0.0, pd.DataFrame()
     c_comp = match_col(df, ['Competência', 'Competencia'])
@@ -351,7 +299,7 @@ fix_pago, fix_venc, fix_pend, df_fix_f = process_contas_competencia(df_fix)
 
 saldo_caixa_real = receita_extrato + saidas_extrato
 
-# Total de pendências (Vencidas + A Vencer)
+# Total de pendências da competência ativa (Vencidas + A Vencer)
 total_vencido_mes = var_venc + fix_venc
 total_a_vencer_mes = var_pend + fix_pend
 total_pendente_mes = total_vencido_mes + total_a_vencer_mes
@@ -411,7 +359,7 @@ def extrair_pendencias(df, tipo):
         df_temp['VENC_DT'] = parse_dates_robust(df_temp[c_venc])
         df_temp['STATUS_UP'] = df_temp[c_st].astype(str).str.strip().str.upper()
         
-        # Filtra títulos não liquidados (PENDENTE ou VENCIDO)
+        # Filtra títulos em aberto (PENDENTE ou VENCIDO)
         pendentes = df_temp[df_temp['STATUS_UP'].isin(['PENDENTE', 'VENCIDO'])].copy()
         pendentes['Tipo de Despesa'] = tipo
         pendentes['Fornecedor_Display'] = pendentes[c_forn] if c_forn else '-'
@@ -462,7 +410,7 @@ if not df_agenda_dinamica.empty:
     else:
         st.success("✅ Nenhum pagamento pendente registrado para a semana atual.")
 else:
-    st.success("✅ Nenhuma conta a pagar pendente encontrada no sistema.")
+    st.info("Nenhuma pendência financeira encontrada.")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
