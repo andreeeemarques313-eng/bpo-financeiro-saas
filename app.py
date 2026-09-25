@@ -8,43 +8,105 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURAÇÃO VISUAL ENTERPRISE (SEM RETICÊNCIAS)
+# 1. CONFIGURAÇÃO VISUAL ENTERPRISE — IDENTIDADE K-BPO (ZEN DOTS & POPPINS)
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Portal BPO Financeiro | Grupo Fiño House",
-    page_icon="📈",
+    page_title="Painel K-BPO | Gestão Financeira Kairós",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# Injeção CSS com as fontes Zen Dots, Poppins e a Paleta de Cores Oficial
 st.markdown("""
     <style>
-    .main { background-color: #f4f6f9; }
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@200;300;400;500;600;700&family=Zen+Dots&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Poppins', sans-serif !important;
+        color: #1B1C1D;
+    }
+
+    .main { 
+        background-color: #F8F9FA; 
+    }
+
+    /* Títulos em Zen Dots */
+    .brand-title {
+        font-family: 'Zen Dots', cursive, sans-serif !important;
+        font-size: 26px;
+        color: #1B1C1D;
+        letter-spacing: -0.55px;
+        line-height: 1.2;
+        margin-bottom: 2px;
+    }
+
+    .brand-highlight {
+        color: #EA3D07 !important;
+    }
+
+    .section-title {
+        font-family: 'Zen Dots', cursive, sans-serif !important;
+        font-size: 17px;
+        color: #1B1C1D;
+        letter-spacing: -0.55px;
+        margin-top: 15px;
+        margin-bottom: 12px;
+    }
+
+    /* Banner de Atualização do Extrato */
+    .update-banner {
+        background-color: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        border-left: 4px solid #EA3D07;
+        border-radius: 6px;
+        padding: 9px 15px;
+        margin-bottom: 16px;
+        font-size: 13px;
+        color: #555657;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    }
+
+    .pulse-dot {
+        height: 8px;
+        width: 8px;
+        background-color: #EA3D07;
+        border-radius: 50%;
+        display: inline-block;
+    }
+
+    /* Cards de Indicadores KPIs */
     .kpi-card {
-        background-color: #ffffff;
+        background-color: #FFFFFF;
         padding: 16px 14px;
         border-radius: 8px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-        border-left: 5px solid #0052CC;
-        margin-bottom: 12px;
-        min-height: 110px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        border: 1px solid #F0F0F0;
+        border-left: 4px solid #EA3D07;
+        min-height: 105px;
     }
+
     .kpi-title { 
         font-size: 11px; 
-        color: #5E6C84; 
-        font-weight: 700; 
+        color: #555657; 
+        font-weight: 600; 
         text-transform: uppercase; 
         letter-spacing: 0.5px;
-        margin-bottom: 6px;
+        margin-bottom: 4px;
     }
+
     .kpi-value { 
-        font-size: clamp(15px, 1.25vw, 22px) !important; 
-        color: #172B4D; 
-        font-weight: 800; 
+        font-family: 'Poppins', sans-serif !important;
+        font-size: clamp(16px, 1.22vw, 22px) !important; 
+        color: #1B1C1D; 
+        font-weight: 700; 
         white-space: nowrap !important;
         overflow: visible !important;
-        text-overflow: clip !important;
     }
+
     .kpi-sub { 
         font-size: 11px; 
         color: #7A869A; 
@@ -54,19 +116,25 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# -----------------------------------------------------------------------------
+# 2. CONFIGURAÇÃO DE UNIDADES E FIXAÇÃO DEFINITIVA DO GID
+# -----------------------------------------------------------------------------
+# COLE O NÚMERO DO SEU GID DIRETAMENTE NO CAMPO 'gid_variaveis' ABAIXO:
 CLIENTES = {
     "Tere": {
         "nome": "Fiño House - Teresópolis (RJ)", 
-        "id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw"
+        "id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw",
+        "gid_variaveis": "557165039"  # <--- SEU GID FIXO AQUI (DEIXA 100% AUTOMÁTICO)
     },
     "OB": {
         "nome": "Fiño House - Minas Gerais (OB)", 
-        "id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw"
+        "id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw",
+        "gid_variaveis": ""
     }
 }
 
 # -----------------------------------------------------------------------------
-# 2. CONVERSÃO MONETÁRIA E PARSERS ROBUSTOS
+# 3. TRATAMENTO NUMÉRICO E PARSER DE DATAS
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if val is None or pd.isna(val):
@@ -111,7 +179,7 @@ def match_col(df, candidates):
     return None
 
 # -----------------------------------------------------------------------------
-# 3. VALIDAÇÃO DE ESQUEMA DAS TABELAS
+# 4. VALIDAÇÃO DE ESQUEMA DAS TABELAS
 # -----------------------------------------------------------------------------
 def is_valid_extrato(df):
     if df.empty or len(df.columns) < 2: return False
@@ -128,11 +196,10 @@ def is_valid_contas(df):
     return has_date and has_val
 
 # -----------------------------------------------------------------------------
-# 4. MOTOR DE EXTRAÇÃO COM PROTEÇÃO CONTRA LINHAS COM ERRO (on_bad_lines)
+# 5. MOTOR DE DOWNLOAD COM LEITURA SEGURA (on_bad_lines)
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=10, show_spinner=False)
 def read_csv_safe(url):
-    """Lê CSV do Google Sheets com proteção contra quebras de linha e separadores anômalos."""
     try:
         df = pd.read_csv(url, on_bad_lines='skip', encoding='utf-8')
         if not df.empty and len(df.columns) >= 2:
@@ -153,7 +220,7 @@ def read_csv_safe(url):
 def download_tab_robust(sheet_id, target_kind, candidate_names, manual_gid=""):
     validator = is_valid_extrato if target_kind == "extrato" else is_valid_contas
 
-    # 1. Se o usuário informou o GID manualmente na barra lateral
+    # Prioridade 1: GID fixado no código ou preenchido na interface
     if manual_gid and str(manual_gid).strip().isdigit():
         gid_clean = str(manual_gid).strip()
         for u in [
@@ -162,9 +229,9 @@ def download_tab_robust(sheet_id, target_kind, candidate_names, manual_gid=""):
         ]:
             df = read_csv_safe(u)
             if validator(df):
-                return df, f"GID Manual ({gid_clean})"
+                return df, f"GID ({gid_clean})"
 
-    # 2. Busca pelas variações nominais no GViz e Export padrão
+    # Prioridade 2: Busca nominal em variações do Google Sheets
     for name in candidate_names:
         for enc in [urllib.parse.quote(name), urllib.parse.quote_plus(name), name]:
             for u in [
@@ -178,16 +245,9 @@ def download_tab_robust(sheet_id, target_kind, candidate_names, manual_gid=""):
     return pd.DataFrame(), None
 
 def load_data_pipeline(sheet_id, manual_var_gid=""):
-    ext_names = [
-        "EXTRATO BANCARIO", "EXTRATO", "EXTRATO BANCÁRIO", "Extrato Bancario"
-    ]
-    var_names = [
-        "CONTAS VARIAVEIS", "CONTAS VARIAVEIS ", "CONTAS VARIÁVEIS", "CONTAS VARIÁVEIS ",
-        "VARIAVEIS", "VARIÁVEIS", "Contas Variaveis", "Contas Variáveis"
-    ]
-    fix_names = [
-        "CONTAS FIXAS", "CONTAS FIXAS ", "FIXAS", "Contas Fixas"
-    ]
+    ext_names = ["EXTRATO BANCARIO", "EXTRATO", "EXTRATO BANCÁRIO", "Extrato Bancario"]
+    var_names = ["CONTAS VARIAVEIS", "CONTAS VARIAVEIS ", "CONTAS VARIÁVEIS", "VARIAVEIS", "Contas Variaveis"]
+    fix_names = ["CONTAS FIXAS", "CONTAS FIXAS ", "FIXAS", "Contas Fixas"]
 
     df_ext, m_e = download_tab_robust(sheet_id, "extrato", ext_names)
     df_var, m_v = download_tab_robust(sheet_id, "variaveis", var_names, manual_var_gid)
@@ -205,23 +265,33 @@ def load_data_pipeline(sheet_id, manual_var_gid=""):
     }
 
 # -----------------------------------------------------------------------------
-# 5. CONTROLES LATERAIS E STATUS
+# 6. BARRA LATERAL (CONTROLES E CONFIGURAÇÕES)
 # -----------------------------------------------------------------------------
-st.sidebar.title("🏢 Painel BPO Financeiro")
-st.sidebar.caption("Alex — Diretor de Tecnologia (CTO)")
+st.sidebar.markdown("<div style='font-family: Zen Dots; font-size: 20px; color: #1B1C1D;'>K-BPO <span style='color: #EA3D07;'>•</span></div>", unsafe_allow_html=True)
+st.sidebar.caption("Gestão Financeira Estratégica")
 st.sidebar.markdown("---")
 
 unidade_chave = st.sidebar.selectbox("Unidade:", list(CLIENTES.keys()), format_func=lambda x: CLIENTES[x]["nome"])
 periodo_filtro = st.sidebar.selectbox("Competência:", ["Setembro/2026", "Agosto/2026", "CONSOLIDADO DO ANO (2026)"])
 
-# Campo para o GID manual caso necessário
+# GID de Contas Variáveis (carrega o fixado no código como padrão)
+default_gid = CLIENTES[unidade_chave].get("gid_variaveis", "")
 manual_var_gid = st.sidebar.text_input(
-    "🔑 GID Contas Variáveis (Opcional):",
-    value="",
-    placeholder="Ex: 987654321",
-    help="Olhe no navegador quando estiver na aba CONTAS VARIAVEIS e copie o número após '#gid='"
+    "🔑 GID Contas Variáveis:",
+    value=default_gid,
+    placeholder="Ex: 557165039",
+    help="O número do GID da aba CONTAS VARIAVEIS já pode ser deixado fixo no código."
 )
 
+# Data do Último Envio do Extrato Bancário
+data_ultimo_extrato = st.sidebar.date_input(
+    "📅 Data do Último Extrato Bancário:",
+    value=datetime.today().date(),
+    format="DD/MM/YYYY",
+    help="Esta data atualiza a nota informativa exibida no topo do painel principal."
+)
+
+st.sidebar.markdown("<br>", unsafe_allow_html=True)
 if st.sidebar.button("🔄 Sincronizar Base de Dados"):
     st.cache_data.clear()
     st.rerun()
@@ -229,14 +299,14 @@ if st.sidebar.button("🔄 Sincronizar Base de Dados"):
 dados = load_data_pipeline(CLIENTES[unidade_chave]["id"], manual_var_gid)
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 📡 Conexão de Dados")
+st.sidebar.markdown("<small style='font-weight: 600; color: #555657;'>STATUS DAS FONTES</small>", unsafe_allow_html=True)
 st_ext_ok, st_ext_mod, st_ext_rows = dados["status"]["extrato"]
 st_var_ok, st_var_mod, st_var_rows = dados["status"]["variaveis"]
 st_fix_ok, st_fix_mod, st_fix_rows = dados["status"]["fixas"]
 
-st.sidebar.markdown(f"{'🟢' if st_ext_ok else '🔴'} **Extrato:** {st_ext_rows} reg ({st_ext_mod or 'Não localizado'})")
-st.sidebar.markdown(f"{'🟢' if st_var_ok else '🔴'} **Variáveis:** {st_var_rows} reg ({st_var_mod or 'Não localizado'})")
-st.sidebar.markdown(f"{'🟢' if st_fix_ok else '🔴'} **Fixas:** {st_fix_rows} reg ({st_fix_mod or 'Não localizado'})")
+st.sidebar.markdown(f"{'🟢' if st_ext_ok else '🔴'} <small>Extrato: {st_ext_rows} reg</small>", unsafe_allow_html=True)
+st.sidebar.markdown(f"{'🟢' if st_var_ok else '🔴'} <small>Variáveis: {st_var_rows} reg</small>", unsafe_allow_html=True)
+st.sidebar.markdown(f"{'🟢' if st_fix_ok else '🔴'} <small>Fixas: {st_fix_rows} reg</small>", unsafe_allow_html=True)
 
 target_month = 9 if "Setembro" in periodo_filtro else (8 if "Agosto" in periodo_filtro else None)
 
@@ -245,7 +315,7 @@ df_var = dados["variaveis"]
 df_fix = dados["fixas"]
 
 # -----------------------------------------------------------------------------
-# 6. REGRAS DE CÁLCULO FINANCEIRO (COMPETÊNCIA)
+# 7. PROCESSAMENTO FINANCEIRO
 # -----------------------------------------------------------------------------
 
 # REGRA 1: ENTRADAS EXCLUSIVAS DA ABA EXTRATO BANCÁRIO
@@ -265,7 +335,7 @@ if not df_ext.empty:
             receita_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] > 0]['VALOR_NUM'].sum()
             saidas_extrato = df_ext_filtro[df_ext_filtro['VALOR_NUM'] < 0]['VALOR_NUM'].sum()
 
-# REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DA COMPETÊNCIA ATIVA
+# REGRA 2: SAÍDAS FIXAS E VARIÁVEIS SOMENTE DA COMPETÊNCIA
 def process_contas_competencia(df):
     if df.empty: return 0.0, 0.0, 0.0, pd.DataFrame()
     c_comp = match_col(df, ['Competência', 'Competencia'])
@@ -279,7 +349,6 @@ def process_contas_competencia(df):
         s_pag = parse_dates_robust(df[c_pag]) if c_pag else pd.Series(index=df.index, dtype='datetime64[ns]')
         s_venc = parse_dates_robust(df[c_venc]) if c_venc else pd.Series(index=df.index, dtype='datetime64[ns]')
         
-        # Prioriza Competência; se vazia, utiliza Pagamento ou Vencimento
         df['DT_REF'] = s_comp.fillna(s_pag).fillna(s_venc)
         df['VALOR_NUM'] = df[c_val].apply(clean_currency)
         df['ST_UP'] = df[c_st].astype(str).str.strip().str.upper()
@@ -298,38 +367,45 @@ var_pago, var_venc, var_pend, df_var_f = process_contas_competencia(df_var)
 fix_pago, fix_venc, fix_pend, df_fix_f = process_contas_competencia(df_fix)
 
 saldo_caixa_real = receita_extrato + saidas_extrato
-
-# Total de pendências da competência ativa (Vencidas + A Vencer)
 total_vencido_mes = var_venc + fix_venc
 total_a_vencer_mes = var_pend + fix_pend
 total_pendente_mes = total_vencido_mes + total_a_vencer_mes
 
 # -----------------------------------------------------------------------------
-# 7. DASHBOARD EXECUTIVO: KPI CARDS
+# 8. CABEÇALHO EXECUTIVO E NOTA DE ATUALIZAÇÃO DOS EXTRATOS
 # -----------------------------------------------------------------------------
-st.title(f"📊 Painel Executivo BPO Financeiro — {CLIENTES[unidade_chave]['nome']}")
-st.caption(f"Competência: **{periodo_filtro}** | Monitorização Automatizada em Tempo Real")
+st.markdown(f"<div class='brand-title'>PAINEL K-BPO <span class='brand-highlight'>|</span> {CLIENTES[unidade_chave]['nome']}</div>", unsafe_allow_html=True)
+st.caption(f"Competência Ativa: **{periodo_filtro}** | Gestão de Tesouraria Integrada")
 
+# Banner de atualização solicitado
+st.markdown(f"""
+    <div class="update-banner">
+        <span class="pulse-dot"></span>
+        <span>Os dados apresentados estão atualizados até o último envio dos extratos bancários: <strong>{data_ultimo_extrato.strftime('%d/%m/%Y')}</strong></span>
+    </div>
+""", unsafe_allow_html=True)
+
+# CARDS KPIS COM IDENTIDADE K-BPO
 c1, c2, c3, c4, c5 = st.columns(5)
 with c1: 
-    st.markdown(f'<div class="kpi-card"><div class="kpi-title">Entradas (Extrato)</div><div class="kpi-value">{format_brl(receita_extrato)}</div><div class="kpi-sub">Total Recebido</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi-card" style="border-left-color: #1B1C1D;"><div class="kpi-title">Entradas (Extrato)</div><div class="kpi-value">{format_brl(receita_extrato)}</div><div class="kpi-sub">Total Recebido</div></div>', unsafe_allow_html=True)
 with c2: 
-    st.markdown(f'<div class="kpi-card" style="border-left-color: #FF5630;"><div class="kpi-title">Variáveis Pagas</div><div class="kpi-value">{format_brl(var_pago)}</div><div class="kpi-sub">Insumos & Fornecedores</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi-card" style="border-left-color: #EA3D07;"><div class="kpi-title">Variáveis Pagas</div><div class="kpi-value">{format_brl(var_pago)}</div><div class="kpi-sub">Insumos & Fornecedores</div></div>', unsafe_allow_html=True)
 with c3: 
-    st.markdown(f'<div class="kpi-card" style="border-left-color: #FFAB00;"><div class="kpi-title">Fixas Pagas</div><div class="kpi-value">{format_brl(fix_pago)}</div><div class="kpi-sub">Estrutura Operacional</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi-card" style="border-left-color: #555657;"><div class="kpi-title">Fixas Pagas</div><div class="kpi-value">{format_brl(fix_pago)}</div><div class="kpi-sub">Estrutura Operacional</div></div>', unsafe_allow_html=True)
 with c4: 
-    cor_caixa = "#36B37E" if saldo_caixa_real >= 0 else "#FF5630"
+    cor_caixa = "#10B981" if saldo_caixa_real >= 0 else "#EA3D07"
     st.markdown(f'<div class="kpi-card" style="border-left-color: {cor_caixa};"><div class="kpi-title">Resultado de Caixa</div><div class="kpi-value">{format_brl(saldo_caixa_real)}</div><div class="kpi-sub">Entradas − Saídas Extrato</div></div>', unsafe_allow_html=True)
 with c5: 
     sub_pend = f"{format_brl(total_vencido_mes)} Vencidas | {format_brl(total_a_vencer_mes)} A Vencer" if total_pendente_mes > 0 else "Nenhuma Pendência"
-    st.markdown(f'<div class="kpi-card" style="border-left-color: #6554C0;"><div class="kpi-title">Contas Pendentes</div><div class="kpi-value">{format_brl(total_pendente_mes)}</div><div class="kpi-sub">{sub_pend}</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="kpi-card" style="border-left-color: #1B1C1D;"><div class="kpi-title">Contas Pendentes</div><div class="kpi-value">{format_brl(total_pendente_mes)}</div><div class="kpi-sub">{sub_pend}</div></div>', unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 8. REGRA 3: AGENDA FINANCEIRA DINÂMICA (SEMANA VIGENTE SEGUNDA A DOMINGO)
+# 9. AGENDA FINANCEIRA DINÂMICA (SEGUNDA A DOMINGO DA SEMANA VIGENTE)
 # -----------------------------------------------------------------------------
-st.subheader("📅 Agenda Financeira Vigente — Previsão Semanal (Segunda a Domingo)")
+st.markdown("<div class='section-title'>AGENDA FINANCEIRA VIGENTE</div>", unsafe_allow_html=True)
 
 hoje = datetime.today()
 segunda = hoje - timedelta(days=hoje.weekday())
@@ -359,7 +435,6 @@ def extrair_pendencias(df, tipo):
         df_temp['VENC_DT'] = parse_dates_robust(df_temp[c_venc])
         df_temp['STATUS_UP'] = df_temp[c_st].astype(str).str.strip().str.upper()
         
-        # Filtra títulos em aberto (PENDENTE ou VENCIDO)
         pendentes = df_temp[df_temp['STATUS_UP'].isin(['PENDENTE', 'VENCIDO'])].copy()
         pendentes['Tipo de Despesa'] = tipo
         pendentes['Fornecedor_Display'] = pendentes[c_forn] if c_forn else '-'
@@ -410,25 +485,30 @@ if not df_agenda_dinamica.empty:
     else:
         st.success("✅ Nenhum pagamento pendente registrado para a semana atual.")
 else:
-    st.info("Nenhuma pendência financeira encontrada.")
+    st.success("✅ Nenhuma conta a pagar pendente encontrada no sistema.")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 9. DEMONSTRATIVO VISUAL GERENCIAL DE FLUXO DE CAIXA
+# 10. GRÁFICOS GERENCIAIS NAS CORES KAIRÓS
 # -----------------------------------------------------------------------------
-st.subheader("📈 Demonstrativo Gerencial do Período")
+st.markdown("<div class='section-title'>DEMONSTRATIVO GERENCIAL DE FLUXO</div>", unsafe_allow_html=True)
 g1, g2 = st.columns([6, 4])
 
 with g1:
     fig_bar = go.Figure(go.Bar(
         x=['Entradas Extrato', 'Saídas Extrato', 'Variáveis Pagas', 'Fixas Pagas', 'Resultado de Caixa'],
         y=[receita_extrato, abs(saidas_extrato), var_pago, fix_pago, saldo_caixa_real],
-        marker_color=['#0052CC', '#172B4D', '#FF5630', '#FFAB00', cor_caixa],
+        marker_color=['#1B1C1D', '#555657', '#EA3D07', '#555657', cor_caixa],
         text=[format_brl(v) for v in [receita_extrato, abs(saidas_extrato), var_pago, fix_pago, saldo_caixa_real]],
         textposition='auto'
     ))
-    fig_bar.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=20), title="Visão Comparativa do Período (R$)")
+    fig_bar.update_layout(
+        height=340, 
+        margin=dict(l=10, r=10, t=20, b=20), 
+        title="Fluxo Financeiro do Período (R$)",
+        font=dict(family="Poppins")
+    )
     st.plotly_chart(fig_bar, use_container_width=True)
 
 with g2:
@@ -436,15 +516,19 @@ with g2:
         fig_pie = px.pie(
             names=['Contas Variáveis', 'Contas Fixas'],
             values=[var_pago, fix_pago],
-            color_discrete_sequence=['#FF5630', '#FFAB00'],
-            hole=0.4,
+            color_discrete_sequence=['#EA3D07', '#1B1C1D'],
+            hole=0.45,
             title="Distribuição de Saídas Realizadas"
         )
-        fig_pie.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=20))
+        fig_pie.update_layout(
+            height=340, 
+            margin=dict(l=10, r=10, t=20, b=20),
+            font=dict(family="Poppins")
+        )
         st.plotly_chart(fig_pie, use_container_width=True)
 
 st.markdown("---")
-st.subheader("📋 Tabela Operacional de Lançamentos (Variáveis da Competência)")
+st.markdown("<div class='section-title'>BASE OPERACIONAL — LANÇAMENTOS DO PERÍODO</div>", unsafe_allow_html=True)
 if not df_var_f.empty:
     df_var_view = df_var_f.copy()
     c_v_show = match_col(df_var_view, ['Valor', 'Valor (R$)'])
