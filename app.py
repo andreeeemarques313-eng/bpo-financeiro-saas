@@ -18,137 +18,63 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Injeção CSS com foco cirúrgico no date_input, contraste e ocultação do header de dev
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=Zen+Dots&display=swap');
 
-    /* OCULTAÇÃO DA BARRA SUPERIOR DE DESENVOLVEDOR */
-    header[data-testid="stHeader"] {
-        display: none !important;
-        visibility: hidden !important;
-        height: 0px !important;
-    }
+    header[data-testid="stHeader"] { display: none !important; visibility: hidden !important; height: 0px !important; }
     #MainMenu, footer { visibility: hidden !important; }
 
-    /* FORÇA FUNDO BRANCO GERAL */
     html, body, .stApp, [data-testid="stAppViewContainer"], .main {
-        background-color: #FFFFFF !important;
-        font-family: 'Poppins', sans-serif !important;
-        color: #1B1C1D !important;
-        padding-top: 10px !important;
+        background-color: #FFFFFF !important; font-family: 'Poppins', sans-serif !important;
+        color: #1B1C1D !important; padding-top: 10px !important;
     }
 
-    /* BARRA LATERAL */
-    [data-testid="stSidebar"] {
-        background-color: #F8F9FA !important;
-        border-right: 1px solid #E5E7EB !important;
-    }
+    [data-testid="stSidebar"] { background-color: #F8F9FA !important; border-right: 1px solid #E5E7EB !important; }
     [data-testid="stSidebar"] label, [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] div {
-        color: #1B1C1D !important;
-        font-weight: 600 !important;
+        color: #1B1C1D !important; font-weight: 600 !important;
     }
 
-    /* PADRONIZAÇÃO DE INPUTS */
     div[data-baseweb="select"] > div, div[data-baseweb="input"] > div, div[data-baseweb="input"],
     div[data-testid="stDateInput"] > div, div[data-testid="stDateInput"] div[data-baseweb="input"] > div, div[data-testid="stDateInput"] input,
     input, select, textarea {
-        background-color: #FFFFFF !important;
-        color: #1B1C1D !important;
-        border: 1px solid #CBD5E1 !important;
-        border-radius: 6px !important;
-        font-weight: 500 !important;
+        background-color: #FFFFFF !important; color: #1B1C1D !important;
+        border: 1px solid #CBD5E1 !important; border-radius: 6px !important; font-weight: 500 !important;
     }
     div[data-testid="stDateInput"] *, div[data-baseweb="select"] *, div[data-baseweb="input"] * {
-        color: #1B1C1D !important;
-        background-color: #FFFFFF !important;
-        fill: #1B1C1D !important;
+        color: #1B1C1D !important; background-color: #FFFFFF !important; fill: #1B1C1D !important;
     }
 
-    /* BOTÃO */
     div[data-testid="stButton"] > button {
-        background-color: #1B1C1D !important;
-        color: #FFFFFF !important;
-        border: 1px solid #1B1C1D !important;
-        border-radius: 6px !important;
-        font-family: 'Poppins', sans-serif !important;
-        font-weight: 600 !important;
-        width: 100% !important;
-        padding: 10px 16px !important;
-        transition: all 0.2s ease;
+        background-color: #1B1C1D !important; color: #FFFFFF !important;
+        border: 1px solid #1B1C1D !important; border-radius: 6px !important;
+        font-family: 'Poppins', sans-serif !important; font-weight: 600 !important;
+        width: 100% !important; padding: 10px 16px !important; transition: all 0.2s ease;
     }
-    div[data-testid="stButton"] > button:hover {
-        background-color: #EA3D07 !important;
-        border-color: #EA3D07 !important;
-    }
+    div[data-testid="stButton"] > button:hover { background-color: #EA3D07 !important; border-color: #EA3D07 !important; }
     div[data-testid="stButton"] > button * { color: #FFFFFF !important; }
 
-    /* RADIO BUTTONS */
     div[data-testid="stRadio"] label, div[data-testid="stRadio"] p, div[data-testid="stRadio"] span, div[role="radiogroup"] * {
-        color: #1B1C1D !important;
-        font-family: 'Poppins', sans-serif !important;
-        font-weight: 500 !important;
+        color: #1B1C1D !important; font-family: 'Poppins', sans-serif !important; font-weight: 500 !important;
     }
 
-    /* TÍTULOS */
-    .brand-title {
-        font-family: 'Zen Dots', cursive, sans-serif !important;
-        font-size: 24px;
-        color: #1B1C1D !important;
-        letter-spacing: -0.55px;
-        line-height: 1.2;
-        margin-bottom: 2px;
-    }
+    .brand-title { font-family: 'Zen Dots', cursive, sans-serif !important; font-size: 24px; color: #1B1C1D !important; letter-spacing: -0.55px; line-height: 1.2; margin-bottom: 2px; }
     .brand-highlight { color: #EA3D07 !important; }
-    .section-title {
-        font-family: 'Zen Dots', cursive, sans-serif !important;
-        font-size: 16px;
-        color: #1B1C1D !important;
-        letter-spacing: -0.55px;
-        margin-top: 18px; margin-bottom: 12px;
-    }
+    .section-title { font-family: 'Zen Dots', cursive, sans-serif !important; font-size: 16px; color: #1B1C1D !important; letter-spacing: -0.55px; margin-top: 18px; margin-bottom: 12px; }
 
-    /* BANNER */
     .update-banner {
-        background-color: #F8F9FA !important;
-        border: 1px solid #E5E7EB;
-        border-left: 4px solid #EA3D07;
-        border-radius: 6px;
-        padding: 9px 15px;
-        margin-bottom: 16px;
-        font-size: 13px;
-        color: #1B1C1D !important;
-        display: flex; align-items: center; gap: 8px;
+        background-color: #F8F9FA !important; border: 1px solid #E5E7EB; border-left: 4px solid #EA3D07;
+        border-radius: 6px; padding: 9px 15px; margin-bottom: 16px; font-size: 13px; color: #1B1C1D !important; display: flex; align-items: center; gap: 8px;
     }
-    .pulse-dot {
-        height: 8px; width: 8px;
-        background-color: #EA3D07;
-        border-radius: 50%; display: inline-block;
-    }
+    .pulse-dot { height: 8px; width: 8px; background-color: #EA3D07; border-radius: 50%; display: inline-block; }
 
-    /* KPIS */
     .kpi-card {
-        background-color: #F1F2F4 !important;
-        padding: 16px 14px;
-        border-radius: 8px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        border: 1px solid #E2E4E8;
-        border-left: 5px solid #EA3D07;
-        min-height: 105px;
+        background-color: #F1F2F4 !important; padding: 16px 14px; border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05); border: 1px solid #E2E4E8; border-left: 5px solid #EA3D07; min-height: 105px;
     }
-    .kpi-title { 
-        font-size: 11px; color: #555657 !important; font-weight: 700; 
-        text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
-    }
-    .kpi-value { 
-        font-family: 'Poppins', sans-serif !important;
-        font-size: clamp(16px, 1.25vw, 22px) !important; 
-        color: #1B1C1D !important; font-weight: 800; 
-        white-space: nowrap !important; overflow: visible !important;
-    }
-    .kpi-sub { 
-        font-size: 11px; color: #555657 !important; margin-top: 4px; white-space: nowrap;
-    }
+    .kpi-title { font-size: 11px; color: #555657 !important; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .kpi-value { font-family: 'Poppins', sans-serif !important; font-size: clamp(16px, 1.25vw, 22px) !important; color: #1B1C1D !important; font-weight: 800; white-space: nowrap !important; overflow: visible !important; }
+    .kpi-sub { font-size: 11px; color: #555657 !important; margin-top: 4px; white-space: nowrap; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -159,54 +85,64 @@ CLIENTES = {
     "Tere": {
         "nome": "Fiño House - Teresópolis (RJ)", 
         "id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw",
-        "gid_variaveis": "546478773",   # GID RJ
+        "gid_variaveis": "546478773",
         "logo_file": "LOGO FINO HOUSE.png"
     },
     "OB": {
         "nome": "Fiño House - Minas Gerais (OB)", 
         "id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw",
-        "gid_variaveis": "1225326443",  # GID MG
+        "gid_variaveis": "1225326443",
         "logo_file": "LOGO FINO HOUSE.png"
     }
 }
 
 # -----------------------------------------------------------------------------
-# 3. TRATAMENTO NUMÉRICO (FORÇA BRUTA) E PARSERS AVANÇADOS
+# 3. PARSERS E TRATAMENTO DE DADOS (SUPORTE AO CÓDIGO NATIVO DO GOOGLE SHEETS)
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if pd.isna(val): return 0.0
     if isinstance(val, (int, float)): return float(val)
-    # Extrai APENAS números, vírgulas, pontos e sinais de negativo (ignora espaços ocultos)
     s = re.sub(r'[^\d.,-]', '', str(val))
     if not s or s == '-': return 0.0
     
     if '.' in s and ',' in s:
-        if s.rfind(',') > s.rfind('.'):
-            s = s.replace('.', '').replace(',', '.')
-        else:
-            s = s.replace(',', '')
-    elif ',' in s:
-        s = s.replace(',', '.')
-    try:
-        return float(s)
-    except:
-        return 0.0
+        if s.rfind(',') > s.rfind('.'): s = s.replace('.', '').replace(',', '.')
+        else: s = s.replace(',', '')
+    elif ',' in s: s = s.replace(',', '.')
+    try: return float(s)
+    except: return 0.0
 
 def format_brl(val):
     return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def parse_dates_robust(series):
     if series is None or series.empty: return pd.Series(dtype='datetime64[ns]')
-    s = series.astype(str).str.strip().replace({'nan': None, 'None': None, '': None, 'NaT': None})
-    try:
-        return pd.to_datetime(s, format='mixed', dayfirst=True, errors='coerce')
-    except:
-        return pd.to_datetime(s, dayfirst=True, errors='coerce')
+    
+    def parse_single_date(val):
+        s = str(val).strip()
+        if not s or s in ['nan', 'None', 'NaT', '']: return pd.NaT
+        
+        # TRADUTOR DO FORMATO INTERNO DO GOOGLE SHEETS (Ex: Date(2026, 8, 16))
+        m = re.match(r'Date\((\d+),\s*(\d+),\s*(\d+)\)', s, re.IGNORECASE)
+        if m:
+            y, mth, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            return pd.Timestamp(year=y, month=mth+1, day=d)
+            
+        try: return pd.to_datetime(s, format='mixed', dayfirst=True)
+        except:
+            try: return pd.to_datetime(s, dayfirst=True)
+            except: return pd.NaT
+
+    return series.apply(parse_single_date)
 
 def extrair_mes_inteligente(val):
     if pd.isna(val): return None
     s = str(val).strip().upper()
     if not s or s in ['NAN', 'NONE', '']: return None
+    
+    # TRADUTOR DO FORMATO INTERNO DO GOOGLE SHEETS (Ex: DATE(2026, 8, 16))
+    m_date = re.match(r'DATE\((\d+),\s*(\d+),\s*(\d+)\)', s)
+    if m_date: return int(m_date.group(2)) + 1
     
     mapa_meses = {'JAN': 1, 'FEV': 2, 'MAR': 3, 'ABR': 4, 'MAI': 5, 'JUN': 6, 'JUL': 7, 'AGO': 8, 'SET': 9, 'OUT': 10, 'NOV': 11, 'DEZ': 12}
     for abrev, num in mapa_meses.items():
@@ -215,8 +151,7 @@ def extrair_mes_inteligente(val):
     try:
         dt = pd.to_datetime(s, format='mixed', dayfirst=True, errors='coerce')
         if pd.notna(dt): return dt.month
-    except Exception:
-        pass
+    except Exception: pass
     
     m = re.search(r'\b(0?[1-9]|1[0-2])[/.-]\d{2,4}\b', s)
     if m:
@@ -224,23 +159,33 @@ def extrair_mes_inteligente(val):
         except: pass
     return None
 
+def normalize_dataframe(df):
+    """Garante que a linha de cabeçalhos correta seja identificada, mesmo que existam linhas vazias no topo."""
+    if df.empty: return df
+    cols_str = " ".join([str(c).upper() for c in df.columns])
+    if "VALOR" in cols_str or "DATA" in cols_str or "VENCIMENTO" in cols_str or "FORNECEDOR" in cols_str:
+        return df
+        
+    for i in range(min(3, len(df))):
+        row_str = " ".join([str(x).upper() for x in df.iloc[i].values])
+        if "VALOR" in row_str or "VENCIMENTO" in row_str or "FORNECEDOR" in row_str:
+            new_cols = [f"Unnamed_{j}" if pd.isna(col) else str(col) for j, col in enumerate(df.iloc[i])]
+            df.columns = new_cols
+            return df.iloc[i+1:].reset_index(drop=True)
+    return df
+
 def match_col(df, candidates):
-    """Busca o nome correto da coluna blindando contra 'Forma de pagamento' e 'Status Conciliação'"""
     if df.empty: return None
     cols_map = {str(c).strip().lower(): c for c in df.columns}
     
-    # 1. Tenta Match Exato primeiro
     for cand in candidates:
         clean = cand.strip().lower()
-        if clean in cols_map: 
-            return cols_map[clean]
+        if clean in cols_map: return cols_map[clean]
             
-    # 2. Match parcial seguro
     for cand in candidates:
         clean = cand.strip().lower()
         for k, v in cols_map.items():
             if clean in k:
-                # Proteções vitais contra colisão
                 if clean == 'pagamento' and 'forma' in k: continue
                 if clean == 'status' and 'concilia' in k: continue
                 return v
@@ -269,8 +214,7 @@ def read_csv_safe(url):
     try:
         df = pd.read_csv(url, on_bad_lines='skip', encoding='utf-8')
         if not df.empty and len(df.columns) >= 2:
-            df.columns = [str(c).strip() for c in df.columns]
-            return df
+            return normalize_dataframe(df)
     except Exception:
         pass
     return pd.DataFrame()
@@ -337,7 +281,7 @@ periodo_filtro = st.sidebar.selectbox("Competência:", ["Setembro/2026", "Agosto
 default_gid = CLIENTES[unidade_chave].get("gid_variaveis", "")
 manual_var_gid = st.sidebar.text_input(
     "🔑 GID Contas Variáveis:", value=default_gid, key=f"input_gid_{unidade_chave}",
-    placeholder="Ex: 546478773 ou 2112595527"
+    placeholder="Ex: 546478773 ou 1225326443"
 )
 
 data_ultimo_extrato = st.sidebar.date_input(
@@ -500,9 +444,7 @@ def extrair_pendencias(df, tipo):
         cond_pago = df_temp['STATUS_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
         cond_aberto = df_temp['STATUS_UP'].str.contains('PEND|VENC|ATRAS|ABERT', regex=True, na=False) & (~cond_pago)
         
-        # Filtro de segurança: exige data válida e valor maior que zero para existir como obrigação
         cond_dado_valido = df_temp['VENC_DT'].notna() & (df_temp['VALOR_NUM'] > 0)
-        
         pendentes = df_temp[cond_aberto & cond_dado_valido].copy()
         
         pendentes['Tipo de Despesa'] = tipo
