@@ -3,12 +3,13 @@ import pandas as pd
 import requests
 import urllib.parse
 import re
+import os
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURAÇÃO VISUAL ENTERPRISE — IDENTIDADE K-BPO (ZEN DOTS & POPPINS)
+# 1. CONFIGURAÇÃO VISUAL ENTERPRISE — TEMA BRANCO FORÇADO & IDENTIDADE K-BPO
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Painel K-BPO | Gestão Financeira Kairós",
@@ -17,25 +18,33 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Injeção CSS com as fontes Zen Dots, Poppins e a Paleta de Cores Oficial
+# Força o fundo branco e caixas de KPIs em cinza de alto contraste
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@200;300;400;500;600;700&family=Zen+Dots&display=swap');
 
-    html, body, [class*="css"] {
+    /* Força fundo branco em toda a aplicação Streamlit */
+    html, body, .stApp, [data-testid="stAppViewContainer"], .main {
+        background-color: #FFFFFF !important;
         font-family: 'Poppins', sans-serif !important;
-        color: #1B1C1D;
+        color: #1B1C1D !important;
     }
 
-    .main { 
-        background-color: #F8F9FA; 
+    /* Barra lateral em cinza suave e texto legível */
+    [data-testid="stSidebar"] {
+        background-color: #F8F9FA !important;
+        border-right: 1px solid #E5E7EB !important;
+    }
+    
+    [data-testid="stSidebar"] * {
+        color: #1B1C1D !important;
     }
 
-    /* Títulos em Zen Dots */
+    /* Tipografia de Títulos em Zen Dots */
     .brand-title {
         font-family: 'Zen Dots', cursive, sans-serif !important;
-        font-size: 26px;
-        color: #1B1C1D;
+        font-size: 24px;
+        color: #1B1C1D !important;
         letter-spacing: -0.55px;
         line-height: 1.2;
         margin-bottom: 2px;
@@ -47,27 +56,26 @@ st.markdown("""
 
     .section-title {
         font-family: 'Zen Dots', cursive, sans-serif !important;
-        font-size: 17px;
-        color: #1B1C1D;
+        font-size: 16px;
+        color: #1B1C1D !important;
         letter-spacing: -0.55px;
-        margin-top: 15px;
+        margin-top: 18px;
         margin-bottom: 12px;
     }
 
-    /* Banner de Atualização do Extrato */
+    /* Banner Informativo */
     .update-banner {
-        background-color: #FFFFFF;
+        background-color: #F4F5F7 !important;
         border: 1px solid #E5E7EB;
         border-left: 4px solid #EA3D07;
         border-radius: 6px;
         padding: 9px 15px;
         margin-bottom: 16px;
         font-size: 13px;
-        color: #555657;
+        color: #1B1C1D !important;
         display: flex;
         align-items: center;
         gap: 8px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.03);
     }
 
     .pulse-dot {
@@ -78,21 +86,21 @@ st.markdown("""
         display: inline-block;
     }
 
-    /* Cards de Indicadores KPIs */
+    /* Caixas com Valores em Cinza com Alto Contraste */
     .kpi-card {
-        background-color: #FFFFFF;
+        background-color: #F1F2F4 !important;
         padding: 16px 14px;
         border-radius: 8px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-        border: 1px solid #F0F0F0;
-        border-left: 4px solid #EA3D07;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+        border: 1px solid #E2E4E8;
+        border-left: 5px solid #EA3D07;
         min-height: 105px;
     }
 
     .kpi-title { 
         font-size: 11px; 
-        color: #555657; 
-        font-weight: 600; 
+        color: #555657 !important; 
+        font-weight: 700; 
         text-transform: uppercase; 
         letter-spacing: 0.5px;
         margin-bottom: 4px;
@@ -100,41 +108,56 @@ st.markdown("""
 
     .kpi-value { 
         font-family: 'Poppins', sans-serif !important;
-        font-size: clamp(16px, 1.22vw, 22px) !important; 
-        color: #1B1C1D; 
-        font-weight: 700; 
+        font-size: clamp(16px, 1.25vw, 22px) !important; 
+        color: #1B1C1D !important; 
+        font-weight: 800; 
         white-space: nowrap !important;
         overflow: visible !important;
     }
 
     .kpi-sub { 
         font-size: 11px; 
-        color: #7A869A; 
+        color: #555657 !important; 
         margin-top: 4px;
         white-space: nowrap;
+    }
+
+    /* Cabeçalho com Logo */
+    .header-container {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        margin-bottom: 10px;
+    }
+    
+    .client-logo {
+        height: 52px;
+        width: auto;
+        object-fit: contain;
     }
     </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. CONFIGURAÇÃO DE UNIDADES E FIXAÇÃO DEFINITIVA DO GID
+# 2. CONFIGURAÇÃO DE UNIDADES E FIXAÇÃO DO GID
 # -----------------------------------------------------------------------------
-# COLE O NÚMERO DO SEU GID DIRETAMENTE NO CAMPO 'gid_variaveis' ABAIXO:
 CLIENTES = {
     "Tere": {
         "nome": "Fiño House - Teresópolis (RJ)", 
         "id": "1hmByjAyoXmw-nH_nGB4gzCWFTYogXw-BkiPBcMhEfqw",
-        "gid_variaveis": "546478773"  # <--- SEU GID FIXO AQUI (DEIXA 100% AUTOMÁTICO)
+        "gid_variaveis": "546478773",
+        "logo_file": "LOGO FINO HOUSE.png"
     },
     "OB": {
         "nome": "Fiño House - Minas Gerais (OB)", 
         "id": "1xgmgbzffKULhJI6HInEn-uzagRcqSR0A_0HXq53omsw",
-        "gid_variaveis": ""
+        "gid_variaveis": "",
+        "logo_file": "LOGO FINO HOUSE.png"
     }
 }
 
 # -----------------------------------------------------------------------------
-# 3. TRATAMENTO NUMÉRICO E PARSER DE DATAS
+# 3. CONVERSÃO MONETÁRIA E PARSERS
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if val is None or pd.isna(val):
@@ -220,7 +243,7 @@ def read_csv_safe(url):
 def download_tab_robust(sheet_id, target_kind, candidate_names, manual_gid=""):
     validator = is_valid_extrato if target_kind == "extrato" else is_valid_contas
 
-    # Prioridade 1: GID fixado no código ou preenchido na interface
+    # 1. GID fixado ou preenchido
     if manual_gid and str(manual_gid).strip().isdigit():
         gid_clean = str(manual_gid).strip()
         for u in [
@@ -231,7 +254,7 @@ def download_tab_robust(sheet_id, target_kind, candidate_names, manual_gid=""):
             if validator(df):
                 return df, f"GID ({gid_clean})"
 
-    # Prioridade 2: Busca nominal em variações do Google Sheets
+    # 2. Variações nominais
     for name in candidate_names:
         for enc in [urllib.parse.quote(name), urllib.parse.quote_plus(name), name]:
             for u in [
@@ -269,26 +292,30 @@ def load_data_pipeline(sheet_id, manual_var_gid=""):
 # -----------------------------------------------------------------------------
 st.sidebar.markdown("<div style='font-family: Zen Dots; font-size: 20px; color: #1B1C1D;'>K-BPO <span style='color: #EA3D07;'>•</span></div>", unsafe_allow_html=True)
 st.sidebar.caption("Gestão Financeira Estratégica")
+
+# Exibe o logo na barra lateral se for Fiño House
+logo_path = CLIENTES["Tere"].get("logo_file", "")
+if os.path.exists(logo_path):
+    st.sidebar.image(logo_path, use_column_width=True)
+
 st.sidebar.markdown("---")
 
 unidade_chave = st.sidebar.selectbox("Unidade:", list(CLIENTES.keys()), format_func=lambda x: CLIENTES[x]["nome"])
 periodo_filtro = st.sidebar.selectbox("Competência:", ["Setembro/2026", "Agosto/2026", "CONSOLIDADO DO ANO (2026)"])
 
-# GID de Contas Variáveis (carrega o fixado no código como padrão)
 default_gid = CLIENTES[unidade_chave].get("gid_variaveis", "")
 manual_var_gid = st.sidebar.text_input(
     "🔑 GID Contas Variáveis:",
     value=default_gid,
     placeholder="Ex: 557165039",
-    help="O número do GID da aba CONTAS VARIAVEIS já pode ser deixado fixo no código."
+    help="O número do GID já fica fixo automaticamente."
 )
 
-# Data do Último Envio do Extrato Bancário
 data_ultimo_extrato = st.sidebar.date_input(
     "📅 Data do Último Extrato Bancário:",
     value=datetime.today().date(),
     format="DD/MM/YYYY",
-    help="Esta data atualiza a nota informativa exibida no topo do painel principal."
+    help="Atualiza o aviso de fechamento no topo do painel."
 )
 
 st.sidebar.markdown("<br>", unsafe_allow_html=True)
@@ -299,7 +326,7 @@ if st.sidebar.button("🔄 Sincronizar Base de Dados"):
 dados = load_data_pipeline(CLIENTES[unidade_chave]["id"], manual_var_gid)
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<small style='font-weight: 600; color: #555657;'>STATUS DAS FONTES</small>", unsafe_allow_html=True)
+st.sidebar.markdown("<small style='font-weight: 700; color: #555657;'>STATUS DAS FONTES</small>", unsafe_allow_html=True)
 st_ext_ok, st_ext_mod, st_ext_rows = dados["status"]["extrato"]
 st_var_ok, st_var_mod, st_var_rows = dados["status"]["variaveis"]
 st_fix_ok, st_fix_mod, st_fix_rows = dados["status"]["fixas"]
@@ -318,7 +345,7 @@ df_fix = dados["fixas"]
 # 7. PROCESSAMENTO FINANCEIRO
 # -----------------------------------------------------------------------------
 
-# REGRA 1: ENTRADAS EXCLUSIVAS DA ABA EXTRATO BANCÁRIO
+# REGRA 1: ENTRADAS EXCLUSIVAS DO EXTRATO BANCÁRIO
 receita_extrato, saidas_extrato = 0.0, 0.0
 df_ext_filtro = pd.DataFrame()
 
@@ -372,12 +399,22 @@ total_a_vencer_mes = var_pend + fix_pend
 total_pendente_mes = total_vencido_mes + total_a_vencer_mes
 
 # -----------------------------------------------------------------------------
-# 8. CABEÇALHO EXECUTIVO E NOTA DE ATUALIZAÇÃO DOS EXTRATOS
+# 8. CABEÇALHO COM LOGO DA FIÑO HOUSE E AVISO DE ATUALIZAÇÃO
 # -----------------------------------------------------------------------------
-st.markdown(f"<div class='brand-title'>PAINEL K-BPO <span class='brand-highlight'>|</span> {CLIENTES[unidade_chave]['nome']}</div>", unsafe_allow_html=True)
-st.caption(f"Competência Ativa: **{periodo_filtro}** | Gestão de Tesouraria Integrada")
+col_logo, col_titulo = st.columns([1, 7])
 
-# Banner de atualização solicitado
+with col_logo:
+    current_logo = CLIENTES[unidade_chave].get("logo_file", "")
+    if os.path.exists(current_logo):
+        st.image(current_logo, width=80)
+    else:
+        st.markdown("<div style='font-size: 40px;'>🦊</div>", unsafe_allow_html=True)
+
+with col_titulo:
+    st.markdown(f"<div class='brand-title'>PAINEL K-BPO <span class='brand-highlight'>|</span> {CLIENTES[unidade_chave]['nome']}</div>", unsafe_allow_html=True)
+    st.caption(f"Competência Ativa: **{periodo_filtro}** | Gestão de Tesouraria Integrada")
+
+# Banner Informativo
 st.markdown(f"""
     <div class="update-banner">
         <span class="pulse-dot"></span>
@@ -385,7 +422,7 @@ st.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
-# CARDS KPIS COM IDENTIDADE K-BPO
+# CARDS KPIS COM FUNDO CINZA E MÁXIMO CONTRASTE
 c1, c2, c3, c4, c5 = st.columns(5)
 with c1: 
     st.markdown(f'<div class="kpi-card" style="border-left-color: #1B1C1D;"><div class="kpi-title">Entradas (Extrato)</div><div class="kpi-value">{format_brl(receita_extrato)}</div><div class="kpi-sub">Total Recebido</div></div>', unsafe_allow_html=True)
@@ -403,7 +440,7 @@ with c5:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 9. AGENDA FINANCEIRA DINÂMICA (SEGUNDA A DOMINGO DA SEMANA VIGENTE)
+# 9. AGENDA FINANCEIRA DINÂMICA (SEMANA VIGENTE SEGUNDA A DOMINGO)
 # -----------------------------------------------------------------------------
 st.markdown("<div class='section-title'>AGENDA FINANCEIRA VIGENTE</div>", unsafe_allow_html=True)
 
@@ -485,7 +522,7 @@ if not df_agenda_dinamica.empty:
     else:
         st.success("✅ Nenhum pagamento pendente registrado para a semana atual.")
 else:
-    st.success("✅ Nenhuma conta a pagar pendente encontrada no sistema.")
+    st.info("Nenhuma pendência financeira encontrada.")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -507,7 +544,9 @@ with g1:
         height=340, 
         margin=dict(l=10, r=10, t=20, b=20), 
         title="Fluxo Financeiro do Período (R$)",
-        font=dict(family="Poppins")
+        font=dict(family="Poppins", color="#1B1C1D"),
+        plot_bgcolor="#FFFFFF",
+        paper_bgcolor="#FFFFFF"
     )
     st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -523,7 +562,8 @@ with g2:
         fig_pie.update_layout(
             height=340, 
             margin=dict(l=10, r=10, t=20, b=20),
-            font=dict(family="Poppins")
+            font=dict(family="Poppins", color="#1B1C1D"),
+            paper_bgcolor="#FFFFFF"
         )
         st.plotly_chart(fig_pie, use_container_width=True)
 
