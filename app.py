@@ -499,7 +499,11 @@ def extrair_pendencias(df, tipo):
         
         cond_pago = df_temp['STATUS_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
         cond_aberto = df_temp['STATUS_UP'].str.contains('PEND|VENC|ATRAS|ABERT', regex=True, na=False) & (~cond_pago)
-        pendentes = df_temp[cond_aberto].copy()
+        
+        # Filtro de segurança: exige data válida e valor maior que zero para existir como obrigação
+        cond_dado_valido = df_temp['VENC_DT'].notna() & (df_temp['VALOR_NUM'] > 0)
+        
+        pendentes = df_temp[cond_aberto & cond_dado_valido].copy()
         
         pendentes['Tipo de Despesa'] = tipo
         pendentes['Fornecedor_Display'] = pendentes[c_forn] if c_forn else '-'
