@@ -4,6 +4,7 @@ import requests
 import urllib.parse
 import re
 import os
+import time
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
@@ -97,7 +98,7 @@ CLIENTES = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. PARSERS E TRATAMENTO DE DADOS BLINDADO
+# 3. PARSERS E TRATAMENTO DE DADOS ESTÁVEL
 # -----------------------------------------------------------------------------
 def clean_currency(val):
     if val is None or pd.isna(val): return 0.0
@@ -197,22 +198,24 @@ def match_col(df, candidates, fallback_idx=None):
     return None
 
 # -----------------------------------------------------------------------------
-# 4. VALIDAÇÃO DE ESQUEMA DAS TABELAS
+# 4. VALIDAÇÃO DE ESQUEMA DAS TABELAS (PADRÃO ESTÁVEL)
 # -----------------------------------------------------------------------------
 def is_valid_extrato(df):
     if df.empty or len(df.columns) < 2: return False
     cols = [str(c).strip().upper() for c in df.columns]
     if 'INDICADOR' in cols: return False
-    return any('DATA' in c for c in cols) or any('VALOR' in c for c in cols) or any('BANCO' in c for c in cols)
+    return any('DATA' in c for c in cols) and (any('VALOR' in c for c in cols) or any('BANCO' in c for c in cols))
 
 def is_valid_contas(df):
     if df.empty or len(df.columns) < 3: return False
     cols = [str(c).strip().upper() for c in df.columns]
     if 'INDICADOR' in cols: return False
-    return any('VALOR' in c for c in cols) or any('VENCIMENTO' in c for c in cols) or any('FORNECEDOR' in c for c in cols)
+    has_date = any('VENCIMENTO' in c or 'PAGAM' in c or 'COMPET' in c for c in cols)
+    has_val = any('VALOR' in c for c in cols)
+    return has_date and has_val
 
 # -----------------------------------------------------------------------------
-# 5. MOTOR DE DOWNLOAD COM ANTI-CACHE FORÇADO
+# 5. MOTOR DE DOWNLOAD COM LEITURA SEGURA
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=5, show_spinner=False)
 def read_csv_safe(url):
@@ -318,14 +321,13 @@ df_var = dados["variaveis"]
 df_fix = dados["fixas"]
 
 # -----------------------------------------------------------------------------
-# 7. PROCESSAMENTO FINANCEIRO DO EXTRATO COM LEITURA FLEXÍVEL DE ENTRADAS
+# 7. PROCESSAMENTO FINANCEIRO ESTÁVEL
 # -----------------------------------------------------------------------------
 
 receita_extrato, saidas_extrato_bruto = 0.0, 0.0
 if not df_ext.empty:
-    c_dt_e = match_col(df_ext, ['DATA', 'DATA ', 'DATA DO LANÇAMENTO', 'DATA_LANCAMENTO', 'DATA DO LANÇAMENTO '], fallback_idx=0)
-    c_val_e = match_col(df_ext, ['VALOR', 'VALOR (R$)', 'BANCO', 'VALOR LÍQUIDO', 'VALOR LIQUIDO', 'ENTRADA', 'SAÍDA'], fallback_idx=1)
-    
+    c_dt_e = match_col(df_ext, ['DATA', 'DATA ', 'DATA DO LANÇAMENTO', 'DATA_LANCAMENTO'])
+    c_val_e = match_col(df_ext, ['VALOR', 'VALOR (R$)', 'BANCO'])
     if c_dt_e and c_val_e:
         dt_s = parse_dates_robust(df_ext[c_dt_e])
         df_ext['VALOR_NUM'] = df_ext[c_val_e].apply(clean_currency)
@@ -333,11 +335,7 @@ if not df_ext.empty:
         
         mes_ext_final = dt_s.dt.month
         if target_month:
-            # Se o filtro de mês estiver ativo mas o extrato não tiver data reconhecida no mês, 
-            # fazemos fallback amigável para ler todo o extrato carregado para evitar zeros indevidos
             cond_mes = (mes_ext_final == target_month)
-            if not cond_mes.any():
-                cond_mes = pd.Series(True, index=df_ext.index)
         else:
             cond_mes = pd.Series(True, index=df_ext.index)
             
@@ -348,13 +346,13 @@ if not df_ext.empty:
 
 def process_contas_competencia(df):
     if df.empty: return 0.0, 0.0, 0.0, pd.DataFrame()
-    c_comp = match_col(df, ['Competência', 'Competencia', 'MÊS', 'MES'], fallback_idx=0)
-    c_pag = match_col(df, ['Data de Pagamento', 'DATA_PAGAMENTO', 'Data Pagamento', 'ta de Pagame', 'Pagamento'], fallback_idx=2)
-    c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data'], fallback_idx=1)
-    c_val = match_col(df, ['Valor', 'Valor (R$)', 'VALOR'], fallback_idx=8)
-    c_st = match_col(df, ['Status', 'Situação', 'STATUS'], fallback_idx=10)
+    c_comp = match_col(df, ['Competência', 'Competencia', 'MÊS', 'MES'])
+    c_pag = match_col(df, ['Data de Pagamento', 'DATA_PAGAMENTO', 'Data Pagamento', 'ta de Pagame', 'Pagamento'])
+    c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data'])
+    c_val = match_col(df, ['Valor', 'Valor (R$)', 'VALOR'])
+    c_st = match_col(df, ['Status', 'Situação', 'STATUS'])
     
-    if c_val:
+    if c_val and c_st:
         s_pag = parse_dates_robust(df[c_pag]) if c_pag else pd.Series(index=df.index, dtype='datetime64[ns]')
         s_venc = parse_dates_robust(df[c_venc]) if c_venc else pd.Series(index=df.index, dtype='datetime64[ns]')
         
@@ -366,16 +364,11 @@ def process_contas_competencia(df):
         
         df['DT_REF'] = s_pag.fillna(s_venc)
         df['VALOR_NUM'] = df[c_val].apply(clean_currency)
+        df['ST_UP'] = df[c_st].astype(str).str.strip().str.upper()
         
-        if c_st:
-            df['ST_UP'] = df[c_st].astype(str).str.strip().str.upper()
-            status_pago = df['ST_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
-            status_vencido = df['ST_UP'].str.contains('VENC|ATRAS', regex=True, na=False) & (~status_pago)
-            status_pendente = df['ST_UP'].str.contains('PEND|ABERT|A VENCER', regex=True, na=False) & (~status_pago)
-        else:
-            status_pago = pd.Series(True, index=df.index)
-            status_vencido = pd.Series(False, index=df.index)
-            status_pendente = pd.Series(False, index=df.index)
+        status_pago = df['ST_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
+        status_vencido = df['ST_UP'].str.contains('VENC|ATRAS', regex=True, na=False) & (~status_pago)
+        status_pendente = df['ST_UP'].str.contains('PEND|ABERT|A VENCER', regex=True, na=False) & (~status_pago)
         
         if target_month:
             cond_pago_mes = status_pago & ((mes_comp == target_month) | (mes_pag == target_month) | (mes_final == target_month))
@@ -437,15 +430,8 @@ with c5:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 9. AGENDA FINANCEIRA E BASE OPERACIONAL (COM AUDITORIA DE ENTRADAS)
+# 9. AGENDA FINANCEIRA E BASE OPERACIONAL
 # -----------------------------------------------------------------------------
-st.markdown("<div class='section-title'>DIAGNÓSTICO DE INTEGRIDADE DO EXTRATO</div>", unsafe_allow_html=True)
-with st.expander("🔍 Clique aqui para inspecionar os dados brutos e somatório do Extrato Bancário", expanded=False):
-    st.write("Colunas detectadas no Extrato:", list(df_ext.columns) if not df_ext.empty else "Vazio")
-    if not df_ext.empty and 'VALOR_NUM' in df_ext.columns:
-        st.info(f"Soma bruta de valores positivos no extrato inteiro (sem filtro de mês): {format_brl(df_ext[df_ext['VALOR_NUM'] > 0]['VALOR_NUM'].sum())}")
-    st.dataframe(df_ext.head(5) if not df_ext.empty else pd.DataFrame(), use_container_width=True)
-
 st.markdown("<div class='section-title'>AGENDA FINANCEIRA VIGENTE</div>", unsafe_allow_html=True)
 hoje = datetime.today()
 segunda = hoje - timedelta(days=hoje.weekday())
@@ -459,25 +445,21 @@ with ag2:
 
 def extrair_pendencias(df, tipo):
     if df.empty: return pd.DataFrame()
-    c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data', 'DATA_VENCIMENTO'], fallback_idx=1)
-    c_val = match_col(df, ['Valor', 'Valor (R$)', 'VALOR'], fallback_idx=8)
-    c_st = match_col(df, ['Status', 'Situação', 'STATUS', 'SITUACAO'], fallback_idx=10)
-    c_forn = match_col(df, ['Fornecedor', 'Razão Social', 'Beneficiário', 'FORNECEDOR'], fallback_idx=5)
-    c_desc = match_col(df, ['Descrição', 'Descricao', 'Item', 'DESCRICAO'], fallback_idx=6)
-    c_cat = match_col(df, ['Categoria', 'CATEGORIA'], fallback_idx=3)
+    c_venc = match_col(df, ['Vencimento', 'Data de Vencimento', 'Data', 'DATA_VENCIMENTO'])
+    c_val = match_col(df, ['Valor', 'Valor (R$)', 'VALOR'])
+    c_st = match_col(df, ['Status', 'Situação', 'STATUS', 'SITUACAO'])
+    c_forn = match_col(df, ['Fornecedor', 'Razão Social', 'Beneficiário', 'FORNECEDOR'])
+    c_desc = match_col(df, ['Descrição', 'Descricao', 'Item', 'DESCRICAO'])
+    c_cat = match_col(df, ['Categoria', 'CATEGORIA'])
     
-    if c_venc and c_val:
+    if c_venc and c_val and c_st:
         df_temp = df.copy()
         df_temp['VALOR_NUM'] = df_temp[c_val].apply(clean_currency)
         df_temp['VENC_DT'] = parse_dates_robust(df_temp[c_venc])
+        df_temp['STATUS_UP'] = df_temp[c_st].astype(str).str.strip().str.upper()
         
-        if c_st:
-            df_temp['STATUS_UP'] = df_temp[c_st].astype(str).str.strip().str.upper()
-            cond_pago = df_temp['STATUS_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
-            cond_aberto = df_temp['STATUS_UP'].str.contains('PEND|VENC|ATRAS|ABERT', regex=True, na=False) & (~cond_pago)
-        else:
-            cond_aberto = pd.Series(True, index=df_temp.index)
-            df_temp['STATUS_UP'] = 'PENDENTE'
+        cond_pago = df_temp['STATUS_UP'].str.contains('PAG|LIQUID|CONCIL|SIM|BAIX|QUIT', regex=True, na=False)
+        cond_aberto = df_temp['STATUS_UP'].str.contains('PEND|VENC|ATRAS|ABERT', regex=True, na=False) & (~cond_pago)
         
         cond_dado_valido = df_temp['VENC_DT'].notna() & (df_temp['VALOR_NUM'] > 0)
         pendentes = df_temp[cond_aberto & cond_dado_valido].copy()
