@@ -4,6 +4,7 @@ import requests
 import urllib.parse
 import re
 import os
+import time
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
@@ -212,19 +213,21 @@ def is_valid_contas(df):
     return any('VALOR' in c for c in cols) or any('VENCIMENTO' in c for c in cols) or any('FORNECEDOR' in c for c in cols)
 
 # -----------------------------------------------------------------------------
-# 5. MOTOR DE DOWNLOAD COM LEITURA SEGURA
+# 5. MOTOR DE DOWNLOAD COM ANTI-CACHE FORÇADO (BYPASS DE PROPAGAÇÃO DO GOOGLE)
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=10, show_spinner=False)
+@st.cache_data(ttl=5, show_spinner=False)
 def read_csv_safe(url):
     try:
-        df = pd.read_csv(url, on_bad_lines='skip', encoding='utf-8')
+        # Adiciona timestamp anti-cache para obrigar o Google Sheets a entregar dados novos
+        separator = "&" if "?" in url else "?"
+        nocache_url = f"{url}{separator}_cb={int(time.time() // 10)}"
+        df = pd.read_csv(nocache_url, on_bad_lines='skip', encoding='utf-8')
         if not df.empty and len(df.columns) >= 2:
             return normalize_dataframe(df)
     except Exception:
         pass
     return pd.DataFrame()
 
-@st.cache_data(ttl=10, show_spinner=False)
 def download_tab_robust(sheet_id, target_kind, candidate_names, manual_gid=""):
     validator = is_valid_extrato if target_kind == "extrato" else is_valid_contas
 
@@ -317,7 +320,7 @@ df_var = dados["variaveis"]
 df_fix = dados["fixas"]
 
 # -----------------------------------------------------------------------------
-# 7. PROCESSAMENTO FINANCEIRO COM CAIXA GERENCIAL (RECEITAS − SAÍDAS PAGAS)
+# 7. PROCESSAMENTO FINANCEIRO COM FALLBACK POR POSIÇÃO
 # -----------------------------------------------------------------------------
 
 receita_extrato, saidas_extrato_bruto = 0.0, 0.0
@@ -394,7 +397,6 @@ def process_contas_competencia(df):
 var_pago, var_venc, var_pend, df_var_f = process_contas_competencia(df_var)
 fix_pago, fix_venc, fix_pend, df_fix_f = process_contas_competencia(df_fix)
 
-# CAIXA GERENCIAL: Receitas do Extrato menos todas as saídas pagas do período (Variáveis + Fixas)
 total_saidas_pagas = var_pago + fix_pago
 saldo_caixa_real = receita_extrato - total_saidas_pagas
 
