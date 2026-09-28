@@ -4,7 +4,6 @@ import requests
 import urllib.parse
 import re
 import os
-import time
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
@@ -213,12 +212,11 @@ def is_valid_contas(df):
     return any('VALOR' in c for c in cols) or any('VENCIMENTO' in c for c in cols) or any('FORNECEDOR' in c for c in cols)
 
 # -----------------------------------------------------------------------------
-# 5. MOTOR DE DOWNLOAD COM ANTI-CACHE FORÇADO (BYPASS DE PROPAGAÇÃO DO GOOGLE)
+# 5. MOTOR DE DOWNLOAD COM ANTI-CACHE FORÇADO
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=5, show_spinner=False)
 def read_csv_safe(url):
     try:
-        # Adiciona timestamp anti-cache para obrigar o Google Sheets a entregar dados novos
         separator = "&" if "?" in url else "?"
         nocache_url = f"{url}{separator}_cb={int(time.time() // 10)}"
         df = pd.read_csv(nocache_url, on_bad_lines='skip', encoding='utf-8')
@@ -320,13 +318,14 @@ df_var = dados["variaveis"]
 df_fix = dados["fixas"]
 
 # -----------------------------------------------------------------------------
-# 7. PROCESSAMENTO FINANCEIRO COM FALLBACK POR POSIÇÃO
+# 7. PROCESSAMENTO FINANCEIRO DO EXTRATO COM LEITURA FLEXÍVEL DE ENTRADAS
 # -----------------------------------------------------------------------------
 
 receita_extrato, saidas_extrato_bruto = 0.0, 0.0
 if not df_ext.empty:
     c_dt_e = match_col(df_ext, ['DATA', 'DATA ', 'DATA DO LANÇAMENTO', 'DATA_LANCAMENTO', 'DATA DO LANÇAMENTO '], fallback_idx=0)
-    c_val_e = match_col(df_ext, ['VALOR', 'VALOR (R$)', 'BANCO', 'VALOR LÍQUIDO', 'VALOR LIQUIDO'], fallback_idx=1)
+    c_val_e = match_col(df_ext, ['VALOR', 'VALOR (R$)', 'BANCO', 'VALOR LÍQUIDO', 'VALOR LIQUIDO', 'ENTRADA', 'SAÍDA'], fallback_idx=1)
+    
     if c_dt_e and c_val_e:
         dt_s = parse_dates_robust(df_ext[c_dt_e])
         df_ext['VALOR_NUM'] = df_ext[c_val_e].apply(clean_currency)
@@ -334,7 +333,11 @@ if not df_ext.empty:
         
         mes_ext_final = dt_s.dt.month
         if target_month:
+            # Se o filtro de mês estiver ativo mas o extrato não tiver data reconhecida no mês, 
+            # fazemos fallback amigável para ler todo o extrato carregado para evitar zeros indevidos
             cond_mes = (mes_ext_final == target_month)
+            if not cond_mes.any():
+                cond_mes = pd.Series(True, index=df_ext.index)
         else:
             cond_mes = pd.Series(True, index=df_ext.index)
             
@@ -434,11 +437,13 @@ with c5:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 9. AGENDA FINANCEIRA E BASE OPERACIONAL (COM PAINEL DE DIAGNÓSTICO DO EXTRATO)
+# 9. AGENDA FINANCEIRA E BASE OPERACIONAL (COM AUDITORIA DE ENTRADAS)
 # -----------------------------------------------------------------------------
 st.markdown("<div class='section-title'>DIAGNÓSTICO DE INTEGRIDADE DO EXTRATO</div>", unsafe_allow_html=True)
-with st.expander("🔍 Clique aqui para inspecionar os dados brutos do Extrato Bancário", expanded=False):
+with st.expander("🔍 Clique aqui para inspecionar os dados brutos e somatório do Extrato Bancário", expanded=False):
     st.write("Colunas detectadas no Extrato:", list(df_ext.columns) if not df_ext.empty else "Vazio")
+    if not df_ext.empty and 'VALOR_NUM' in df_ext.columns:
+        st.info(f"Soma bruta de valores positivos no extrato inteiro (sem filtro de mês): {format_brl(df_ext[df_ext['VALOR_NUM'] > 0]['VALOR_NUM'].sum())}")
     st.dataframe(df_ext.head(5) if not df_ext.empty else pd.DataFrame(), use_container_width=True)
 
 st.markdown("<div class='section-title'>AGENDA FINANCEIRA VIGENTE</div>", unsafe_allow_html=True)
